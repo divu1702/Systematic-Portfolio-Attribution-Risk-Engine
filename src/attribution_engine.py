@@ -2,7 +2,7 @@ import pandas as pd
 import numpy as np
 import os
 import yfinance as yf
-from returns_engine import load_and_calculate_returns
+from src.returns_engine import load_and_calculate_returns
 
 
 def run_dynamic_strategy():
