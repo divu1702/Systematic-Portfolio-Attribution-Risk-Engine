@@ -1,7 +1,7 @@
 import pandas as pd
 import numpy as np
 from scipy.stats import norm
-from returns_engine import load_and_calculate_returns
+from src.returns_engine import load_and_calculate_returns
 
 
 def run_risk_engine():
