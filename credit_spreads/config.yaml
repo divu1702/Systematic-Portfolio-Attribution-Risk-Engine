@@ -1,0 +1,66 @@
+# Stock Credit Spread System — configuration.
+# Every threshold lives here. Keys are validated on load (app/config.py); unknown keys are an error.
+# Keys marked "# +" are not in the spec's template but appear as numbers in the spec text,
+# so they are exposed here rather than hard-coded.
+
+mode: paper            # paper | live
+capital: 500000
+universe: {top_n: 50, turnover_window: 20}            # + turnover_window
+dte_min: 15
+dte_max: 35
+events: {buffer_days: 1, max_staleness_days: 2}
+iv:
+  min_iv_hv_ratio: 1.25
+  min_ivp: 70
+  ivp_history_days: 252
+  ivp_min_history: 120
+  proxy_hv_pctile: 80
+  spike_lookback: 10
+  spike_move_atr: 1.5    # + F5: price move that explains the IV spike, in ATR(14)
+  atm_min_dte: 10        # + ATM IV uses the nearest monthly expiry with at least this many days left
+levels: {fractal_n: 5, lookback: 250, cluster_atr: 0.5, min_buffer_atr: 0.25}
+direction: {max_dist_atr: 1.5}                        # + price within this many ATR of a scored level
+strikes: {delta_min: 0.20, delta_max: 0.30, min_dist_atr: 1.0}
+spread: {widths_steps: [1, 2, 3, 4], min_credit_width: 0.25}
+ev: {hv_weight: 0.5, min_ev_ratio: 0.03}
+liquidity: {max_spread_pct: 0.05, min_oi_lots: 500, min_vol_lots: 50}
+analytics: {hv_window: 20, atr_window: 14, trading_days_per_year: 252}   # +
+exit:
+  stop_mult: 2.0
+  tp_frac: 0.50
+  days_before_expiry: 5
+  thesis_stop: true
+  on_new_event: true
+risk:
+  per_trade: 0.02
+  max_open: 5
+  max_same_direction: 3
+  max_total: 0.08
+  max_per_sector: 1
+  max_margin_util: 0.50
+  daily_stop: 0.03
+  dd_pause: 0.10
+paper: {extra_slip_ticks: 1, margin_fallback_mult: 1.5}   # + margin_fallback_mult
+live: {require_approval: true, max_ops: 2, step_secs: 20, entry_steps: 3, stop_steps: 6}
+schedule:                                             # + all times IST
+  login_reminder: "09:00"
+  gap_check: "09:20"
+  scan: "15:00"
+  thesis_exit: "15:15"
+  eod: "15:35"
+  monitor_every_min: 5
+  no_entry_start: "09:15"
+  no_entry_end: "09:20"
+killswitch: {stale_quote_secs: 60, max_rejections_per_day: 3, reconcile_every_min: 5}   # +
+costs:                 # update when broker or exchange rates change
+  brokerage_per_order: 20
+  stt_sell_premium: 0.0015
+  exchange_txn_pct: null  # fill from current NSE circular
+  sebi_fee_per_crore: 10
+  stamp_buy_pct: 0.00003
+  gst: 0.18
+paths:                                                # + relative to this file's folder
+  db: data/trading.db
+  logs: logs
+  levels_manual: levels_manual.csv
+  events_override: events_override.csv

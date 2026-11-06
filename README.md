@@ -12,3 +12,5 @@ A modular, production-grade quantitative research workflow engineered to ingest 
 ## 📊 Performance Visualization
 *Built with an interactive Streamlit & Plotly UI layer to expose backend mathematical diagnostics.*
 [Insert a clean screenshot or GIF of your Streamlit Dashboard here]
+## Also in this repo
+* **Stock Credit Spread System (`credit_spreads/`)**: a separate NSE stock-options credit-spread scanner and paper-trading engine. See `credit_spreads/README.md`.

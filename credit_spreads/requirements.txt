@@ -1,0 +1,15 @@
+# Milestone 1 (skeleton)
+pydantic>=2.5
+PyYAML>=6.0
+SQLAlchemy>=2.0
+pytest>=7.4
+
+# Later milestones (from the spec's suggested stack); installed as each milestone starts
+# kiteconnect        # M2: broker and market data (Kite Connect app, ₹500/month)
+# pandas             # M3
+# numpy              # M3
+# scipy              # M3: Brent's method IV solver
+# APScheduler        # M6
+# python-telegram-bot  # M7
+# jinja2             # M7: weekly report
+# streamlit          # M7, optional dashboard
