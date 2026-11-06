@@ -189,3 +189,44 @@ class Equity(Base):
     margin_used: Mapped[float] = mapped_column(Float)
     peak: Mapped[float] = mapped_column(Float)
     drawdown: Mapped[float] = mapped_column(Float)
+
+
+class EventFetch(Base):
+    __tablename__ = "event_fetches"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    fetched_at: Mapped[dt.datetime] = mapped_column(DateTime)
+    source: Mapped[str] = mapped_column(String)
+    ok: Mapped[bool] = mapped_column(Boolean)
+    rows: Mapped[int] = mapped_column(Integer, default=0)
+    error: Mapped[Optional[str]] = mapped_column(Text)
+
+
+class Sector(Base):
+    __tablename__ = "sectors"
+    symbol: Mapped[str] = mapped_column(String, primary_key=True)
+    sector: Mapped[str] = mapped_column(String)
+    source: Mapped[str] = mapped_column(String)
+    updated_at: Mapped[dt.datetime] = mapped_column(DateTime)
+
+
+class Holiday(Base):
+    __tablename__ = "holidays"
+    date: Mapped[dt.date] = mapped_column(Date, primary_key=True)
+    description: Mapped[Optional[str]] = mapped_column(Text)
+    source: Mapped[str] = mapped_column(String)
+
+
+class OptionTurnover(Base):
+    __tablename__ = "option_turnover"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    date: Mapped[dt.date] = mapped_column(Date)
+    symbol: Mapped[str] = mapped_column(String)
+    turnover: Mapped[float] = mapped_column(Float)
+    source: Mapped[str] = mapped_column(String)
+
+
+class SystemState(Base):
+    __tablename__ = "system_state"
+    key: Mapped[str] = mapped_column(String, primary_key=True)
+    value: Mapped[Optional[str]] = mapped_column(Text)
+    updated_at: Mapped[dt.datetime] = mapped_column(DateTime)
