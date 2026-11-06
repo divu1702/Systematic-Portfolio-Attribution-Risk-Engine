@@ -56,3 +56,46 @@ def mock_ctx(cfg, tmp_path):
     clock = SimClock(SIM_NOW)
     return build_context(cfg, mock=True, clock=clock, db_path=tmp_path / "mock.db", env={},
                          market=shared_market())
+
+
+@pytest.fixture
+def relaxed_cfg(raw_config, write_config):
+    """Thresholds loosened so that the synthetic market yields accepted spreads; each filter is
+    still evaluated and recorded."""
+    r = raw_config
+    r["iv"].update(min_iv_hv_ratio=0.01, proxy_hv_pctile=1)
+    r["events"].update(estimate_results=False, buffer_days=0)
+    r["direction"] = {"max_dist_atr": 50}
+    r["levels"].update(min_buffer_atr=0.0)
+    r["strikes"] = {"delta_min": 0.05, "delta_max": 0.45, "min_dist_atr": 0.0}
+    r["spread"]["min_credit_width"] = 0.05
+    r["ev"]["min_ev_ratio"] = 0.0
+    r["liquidity"] = {"max_spread_pct": 0.2, "min_oi_lots": 0, "min_vol_lots": 0}
+    return load_config(write_config(r))
+
+
+
+
+def relaxed_ctx(cfg, tmp_path, when=SIM_NOW, name="relaxed.db"):
+    """Mock context whose scan at `when` + 1 minute yields accepted spreads: a seeded low-IV
+    snapshot and a past 'news' event satisfy F5 for every stock."""
+    from datetime import timedelta
+
+    from app.context import build_context
+    from app.jobs import morning_refresh, scan_job
+
+    ctx = build_context(cfg, mock=True, clock=SimClock(when), db_path=tmp_path / name, env={},
+                        market=shared_market())
+    morning_refresh(ctx)
+    scan_job(ctx)
+    with ctx.engine.begin() as conn:
+        for sym in [s.name for s in ctx.broker.market.specs if not s.is_index]:
+            d = when.date() - timedelta(days=4)
+            conn.exec_driver_sql("INSERT OR REPLACE INTO iv_snapshots (ts, date, symbol, expiry, fut_price, atm_iv, "
+                                 "ivp_252, method) VALUES (?, ?, ?, ?, 1, 0.1, 0, 'proxy')",
+                                 (str(when), d.isoformat(), sym, "2026-11-24"))
+            conn.exec_driver_sql("INSERT INTO events (symbol, event_date, event_type, source, fetched_at) "
+                                 "VALUES (?, ?, 'news', 'test', ?)", (sym, (d + timedelta(days=1)).isoformat(),
+                                                                        str(when)))
+    ctx.clock.set(when + timedelta(minutes=1))
+    return ctx

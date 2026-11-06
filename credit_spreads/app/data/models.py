@@ -152,6 +152,13 @@ class Trade(Base):
     mae: Mapped[Optional[float]] = mapped_column(Float)
     mfe: Mapped[Optional[float]] = mapped_column(Float)
     gap_flag: Mapped[bool] = mapped_column(Boolean, default=False)
+    p_market: Mapped[Optional[float]] = mapped_column(Float)
+    p_model: Mapped[Optional[float]] = mapped_column(Float)
+    breakeven_wr: Mapped[Optional[float]] = mapped_column(Float)
+    iv_hv: Mapped[Optional[float]] = mapped_column(Float)
+    short_k: Mapped[Optional[float]] = mapped_column(Float)
+    long_k: Mapped[Optional[float]] = mapped_column(Float)
+    replayed: Mapped[bool] = mapped_column(Boolean, default=False)
 
 
 class Mark(Base):
@@ -163,6 +170,7 @@ class Mark(Base):
     legs_json: Mapped[Optional[str]] = mapped_column(Text)
     cost_to_close: Mapped[Optional[float]] = mapped_column(Float)
     unrealised_pnl: Mapped[Optional[float]] = mapped_column(Float)
+    source: Mapped[str] = mapped_column(String, default="live")
 
 
 class Order(Base):
@@ -230,3 +238,16 @@ class SystemState(Base):
     key: Mapped[str] = mapped_column(String, primary_key=True)
     value: Mapped[Optional[str]] = mapped_column(Text)
     updated_at: Mapped[dt.datetime] = mapped_column(DateTime)
+
+
+class Proposal(Base):
+    __tablename__ = "proposals"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    ts: Mapped[dt.datetime] = mapped_column(DateTime)
+    symbol: Mapped[str] = mapped_column(String)
+    side: Mapped[str] = mapped_column(String)
+    summary: Mapped[str] = mapped_column(Text)
+    payload_json: Mapped[str] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String, default="pending")
+    decided_at: Mapped[Optional[dt.datetime]] = mapped_column(DateTime)
+    expires_at: Mapped[dt.datetime] = mapped_column(DateTime)

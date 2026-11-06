@@ -16,7 +16,7 @@ from app.strategy import ev
 from app.strategy.scanner import STAGES, choose_direction, liquidity_ok, run_scan
 from app.strategy.spreads import BEAR_CALL, BULL_PUT
 from app.views import scan_report
-from tests.conftest import SIM_NOW, shared_market
+from tests.conftest import SIM_NOW, relaxed_ctx, shared_market
 
 
 # ----------------------------------------------------------------------------- EV maths
@@ -127,37 +127,8 @@ def test_f5_fails_closed_on_cold_start(cfg, tmp_path):
         assert "history" in o.reason or "not below" in o.reason
 
 
-@pytest.fixture
-def relaxed_cfg(raw_config, write_config):
-    """Thresholds loosened so that the synthetic market yields accepted spreads; each filter is
-    still evaluated and recorded."""
-    r = raw_config
-    r["iv"].update(min_iv_hv_ratio=0.01, proxy_hv_pctile=1)
-    r["events"].update(estimate_results=False, buffer_days=0)
-    r["direction"] = {"max_dist_atr": 50}
-    r["levels"].update(min_buffer_atr=0.0)
-    r["strikes"] = {"delta_min": 0.05, "delta_max": 0.45, "min_dist_atr": 0.0}
-    r["spread"]["min_credit_width"] = 0.05
-    r["ev"]["min_ev_ratio"] = 0.0
-    r["liquidity"] = {"max_spread_pct": 0.2, "min_oi_lots": 0, "min_vol_lots": 0}
-    return load_config(write_config(r))
-
-
 def test_relaxed_scan_produces_ranked_spreads(relaxed_cfg, tmp_path):
-    ctx = _ctx_at(relaxed_cfg, tmp_path)
-    morning_refresh(ctx)
-    scan_job(ctx)                                     # first scan seeds snapshots
-    # Fake a low-IV snapshot inside the F5 look-back plus a "cause" event for every stock.
-    with ctx.engine.begin() as conn:
-        for sym in [s.name for s in ctx.broker.market.specs if not s.is_index]:
-            d = SIM_NOW.date() - timedelta(days=4)
-            conn.exec_driver_sql("INSERT OR REPLACE INTO iv_snapshots (ts, date, symbol, expiry, fut_price, atm_iv, "
-                                 "ivp_252, method) VALUES (?, ?, ?, ?, 1, 0.1, 0, 'proxy')",
-                                 (str(SIM_NOW), d.isoformat(), sym, "2026-11-24"))
-            conn.exec_driver_sql("INSERT INTO events (symbol, event_date, event_type, source, fetched_at) "
-                                 "VALUES (?, ?, 'news', 'manual', ?)", (sym, (d + timedelta(days=1)).isoformat(),
-                                                                        str(SIM_NOW)))
-    ctx.clock.set(SIM_NOW + timedelta(minutes=1))
+    ctx = relaxed_ctx(relaxed_cfg, tmp_path)
     res = run_scan(ctx)
     assert res.ranked, {o.symbol: (o.stage, o.reason) for o in res.outcomes}
     ratios = [c.ev_ratio for c in res.ranked]

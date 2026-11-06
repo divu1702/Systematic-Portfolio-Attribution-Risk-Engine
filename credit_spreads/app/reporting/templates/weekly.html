@@ -1,0 +1,178 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Weekly Paper Report</title>
+<style>
+:root {
+  color-scheme: light;
+  --surface-0: #f4f3f0; --surface-1: #fcfcfb; --border: #e2e1dc; --grid: #ebeae6;
+  --text-primary: #0b0b0b; --text-secondary: #52514e; --text-muted: #7a7974;
+  --series-1: #2a78d6; --series-neg: #e34948; --neutral: #f0efec;
+  --good: #0ca30c; --critical: #d03b3b;
+}
+@media (prefers-color-scheme: dark) {
+  :root:where(:not([data-theme="light"])) {
+    color-scheme: dark;
+    --surface-0: #111110; --surface-1: #1a1a19; --border: #2e2e2b; --grid: #2a2a28;
+    --text-primary: #f0efec; --text-secondary: #c3c2b7; --text-muted: #8f8e86;
+    --series-1: #3987e5; --series-neg: #e66767; --neutral: #383835;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --surface-0: #111110; --surface-1: #1a1a19; --border: #2e2e2b; --grid: #2a2a28;
+  --text-primary: #f0efec; --text-secondary: #c3c2b7; --text-muted: #8f8e86;
+  --series-1: #3987e5; --series-neg: #e66767; --neutral: #383835;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--surface-0); color: var(--text-primary);
+       font: 14px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+main { max-width: 1040px; margin: 0 auto; padding: 24px 16px 64px; }
+h1 { font-size: 22px; margin: 0 0 4px; }
+h2 { font-size: 16px; margin: 0 0 12px; }
+.sub, .muted { color: var(--text-secondary); }
+.muted { color: var(--text-muted); font-size: 13px; }
+.card { background: var(--surface-1); border: 1px solid var(--border); border-radius: 10px; padding: 16px;
+        margin-top: 16px; overflow-x: auto; }
+.grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; }
+.grid2 .card { margin-top: 0; }
+.grid2.wide { grid-template-columns: repeat(auto-fit, minmax(420px, 1fr)); gap: 24px; }
+@media (max-width: 560px) { .grid2.wide { grid-template-columns: 1fr; } }
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; margin-top: 16px; }
+.tile { background: var(--surface-1); border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; }
+.tile .k { color: var(--text-secondary); font-size: 12px; }
+.tile .v { font-size: 22px; font-weight: 600; font-variant-numeric: tabular-nums; }
+table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
+th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--grid); white-space: nowrap; }
+th { color: var(--text-secondary); font-weight: 500; font-size: 12px; }
+td.r, th.r { text-align: right; }
+.status { font-weight: 600; }
+.status.pass::before { content: "\2713  "; color: var(--good); }
+.status.fail::before { content: "\2717  "; color: var(--critical); }
+.status.info::before { content: "\2139  "; color: var(--text-muted); }
+.banner { padding: 10px 14px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface-1);
+          margin-top: 16px; }
+svg.chart { width: 100%; height: auto; display: block; }
+svg .grid { stroke: var(--grid); stroke-width: 1; }
+svg .ref { stroke: var(--text-muted); stroke-width: 1; }
+svg .tick { fill: var(--text-muted); font-size: 11px; }
+svg .value { fill: var(--text-primary); font-size: 12px; font-weight: 600; }
+svg .hit { fill: transparent; }
+svg .hit:hover { fill: var(--text-primary); opacity: 0.05; }
+.bars { display: grid; gap: 6px; }
+.brow { display: grid; grid-template-columns: minmax(96px, 150px) minmax(80px, 1fr) 84px; gap: 10px; align-items: center; }
+.blab { color: var(--text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bval { font-variant-numeric: tabular-nums; white-space: nowrap; font-size: 13px; text-align: right; }
+.track { position: relative; height: 18px; }
+.track .bar { position: absolute; top: 0; height: 18px; background: var(--series-1); border-radius: 0 4px 4px 0; left: 0; }
+.track.div .bar.neg { background: var(--series-neg); border-radius: 4px 0 0 4px; left: auto; }
+.track.div .zero { position: absolute; left: 50%; top: -2px; bottom: -2px; width: 1px; background: var(--text-muted); }
+.legend { display: flex; gap: 16px; color: var(--text-secondary); font-size: 12px; margin-bottom: 8px; }
+.sw { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 6px; vertical-align: -1px; }
+@media (max-width: 560px) { .brow { grid-template-columns: 96px 1fr; } .bval { grid-column: 2; } }
+</style>
+</head>
+<body>
+<main>
+  <h1>Weekly paper-trading report</h1>
+  <div class="sub">{{ start }} to {{ asof }} &middot; mode {{ mode|upper }} &middot; generated {{ generated.strftime('%Y-%m-%d %H:%M') }} IST</div>
+  {% if mock %}<div class="banner"><strong>Synthetic market.</strong> These results come from the offline simulator. They test the machinery and say nothing about real edge.</div>{% endif %}
+
+  <div class="tiles">
+    <div class="tile"><div class="k">Equity</div><div class="v">{{ equity|inr }}</div></div>
+    <div class="tile"><div class="k">Closed trades (all time)</div><div class="v">{{ all_closed|length }}</div></div>
+    <div class="tile"><div class="k">Closed this week</div><div class="v">{{ week_closed|length }}</div></div>
+    <div class="tile"><div class="k">Open spreads</div><div class="v">{{ open_trades|length }}</div></div>
+    <div class="tile"><div class="k">Win rate vs breakeven</div><div class="v">{% if win_rate is not none %}{{ '%.0f'|format(win_rate*100) }}% / {{ '%.0f'|format((be_avg or 0)*100) }}%{% else %}-{% endif %}</div></div>
+  </div>
+
+  <div class="card">
+    <h2>Go-live scorecard</h2>
+    <p class="muted">Live trading starts only when every bar is met. Status: <span class="status {{ 'pass' if go_live else 'fail' }}">{{ 'all bars met' if go_live else 'not yet' }}</span></p>
+    <table>
+      <tr><th>Metric</th><th>Definition</th><th class="r">Value</th><th>Bar</th><th>Status</th></tr>
+      {% for m in scorecard %}
+      <tr><td>{{ m.name }}</td><td class="muted">{{ m.definition }}</td><td class="r">{{ m.display }}</td><td>{{ m.bar }}</td>
+        <td class="status {{ 'info' if m.passed is none else ('pass' if m.passed else 'fail') }}">{{ 'reported' if m.passed is none else ('pass' if m.passed else 'fail') }}</td></tr>
+      {% endfor %}
+    </table>
+  </div>
+
+  <div class="grid2" style="margin-top:16px">
+    <div class="card"><h2>Equity</h2>{{ equity_svg|safe }}</div>
+    <div class="card"><h2>Drawdown from peak</h2>{{ dd_svg|safe }}</div>
+  </div>
+
+  <div class="card">
+    <h2>Trades closed this week</h2>
+    {% if week_closed %}
+    <table>
+      <tr><th>Symbol</th><th>Side</th><th>Strikes</th><th>Expiry</th><th class="r">Lots</th><th>Entry</th><th>Exit</th>
+          <th class="r">Credit</th><th class="r">Exit cost</th><th>Reason</th><th class="r">Net P&amp;L</th><th class="r">MAE</th><th>Flags</th></tr>
+      {% for t in week_closed %}
+      <tr><td>{{ t.symbol }}</td><td>{{ t.side.replace('_',' ') }}</td><td>{{ '%g'|format(t.short_k) }}/{{ '%g'|format(t.long_k) }}</td><td>{{ t.expiry }}</td>
+          <td class="r">{{ t.lots }}</td><td>{{ t.entry_ts.strftime('%d %b %H:%M') }}</td><td>{{ t.exit_ts.strftime('%d %b %H:%M') }}</td>
+          <td class="r">{{ '%.2f'|format(t.entry_credit) }}</td><td class="r">{{ '%.2f'|format(t.exit_cost) }}</td><td>{{ t.exit_reason }}</td>
+          <td class="r">{{ t.pnl_net|inr }}</td><td class="r">{{ (t.mae or 0)|inr }}</td>
+          <td>{{ 'gap ' if t.gap_flag }}{{ 'replayed ' if t.replayed }}{{ 'margin-fallback' if t.margin_fallback }}</td></tr>
+      {% endfor %}
+    </table>
+    {% else %}<p class="muted">No trades closed this week.</p>{% endif %}
+    {% if open_trades %}
+    <h2 style="margin-top:16px">Open spreads</h2>
+    <table>
+      <tr><th>Symbol</th><th>Side</th><th>Strikes</th><th>Expiry</th><th class="r">Lots</th><th class="r">Credit</th><th class="r">Max loss</th><th class="r">MFE</th><th class="r">MAE</th></tr>
+      {% for t in open_trades %}
+      <tr><td>{{ t.symbol }}</td><td>{{ t.side.replace('_',' ') }}</td><td>{{ '%g'|format(t.short_k) }}/{{ '%g'|format(t.long_k) }}</td><td>{{ t.expiry }}</td>
+          <td class="r">{{ t.lots }}</td><td class="r">{{ '%.2f'|format(t.entry_credit) }}</td><td class="r">{{ t.max_loss|inr }}</td>
+          <td class="r">{{ (t.mfe or 0)|inr }}</td><td class="r">{{ (t.mae or 0)|inr }}</td></tr>
+      {% endfor %}
+    </table>
+    {% endif %}
+  </div>
+
+  <div class="card">
+    <h2>Net P&amp;L by group (all closed trades)</h2>
+    <div class="legend"><span><span class="sw" style="background:var(--series-1)"></span>net gain</span><span><span class="sw" style="background:var(--series-neg)"></span>net loss</span></div>
+    <div class="grid2 wide">
+      {% for name, svg in split_charts.items() %}
+      <div><h2 style="font-size:14px">{{ name }}</h2>{{ svg|safe }}
+        <table style="margin-top:8px"><tr><th>{{ name }}</th><th class="r">Trades</th><th class="r">Won</th><th class="r">Net</th></tr>
+        {% for r in splits[name] %}<tr><td>{{ r.key }}</td><td class="r">{{ r.n }}</td><td class="r">{{ '%.0f'|format(r.win_rate*100) }}%</td><td class="r">{{ r.net|inr }}</td></tr>{% endfor %}
+        </table></div>
+      {% endfor %}
+    </div>
+  </div>
+
+  <div class="grid2" style="margin-top:16px">
+    <div class="card">
+      <h2>Rejection funnel this week</h2>
+      <p class="muted">{{ funnel_week[0] }} stock-scans; {{ funnel_week[2] }} accepted. Bars show how many each stage removed.</p>
+      {{ funnel_week_svg|safe }}
+      <table style="margin-top:8px"><tr><th>Stage</th><th class="r">Removed</th><th class="r">Remaining</th></tr>
+        {% for s, n, rem in funnel_week[1] %}<tr><td>{{ s }}</td><td class="r">{{ n }}</td><td class="r">{{ rem }}</td></tr>{% endfor %}
+        <tr><td>accepted</td><td></td><td class="r">{{ funnel_week[2] }}</td></tr></table>
+    </div>
+    <div class="card">
+      <h2>MAE distribution</h2>
+      <p class="muted">Worst open loss per closed trade, in multiples of the entry credit. The hard stop sits near {{ '%g'|format(stop_line) }}x; many trades bunched just under it suggests the stop is tight, few anywhere near it suggests it is loose.</p>
+      {{ mae_svg|safe }}
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Calibration: p_model vs actual win rate</h2>
+    <div class="grid2">
+      <div>{{ cal_svg|safe }}</div>
+      <div><table><tr><th>Bin</th><th class="r">Trades</th><th class="r">p_model</th><th class="r">Actual</th></tr>
+        {% for r in calibration %}<tr><td>{{ r.bin }}</td><td class="r">{{ r.n }}</td><td class="r">{{ '%.0f'|format(r.p_model*100) }}%</td><td class="r">{{ '%.0f'|format(r.actual*100) }}%</td></tr>{% else %}<tr><td colspan="4" class="muted">No closed trades yet.</td></tr>{% endfor %}
+      </table></div>
+    </div>
+  </div>
+
+  <p class="muted" style="margin-top:24px">Tuning rule: change thresholds only in batches after every 30 closed trades and record each change in CHANGELOG.md.</p>
+</main>
+</body>
+</html>

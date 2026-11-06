@@ -196,6 +196,7 @@ class LiveCfg(_Section):
     step_secs: PosInt = 20
     entry_steps: PosInt = 3
     stop_steps: PosInt = 6
+    approval_timeout_min: PosInt = 20     # an unanswered proposal expires after this
 
     @field_validator("require_approval")
     @classmethod

@@ -167,3 +167,11 @@ def equity_token(engine: Engine, d: date, underlying: str) -> Optional[int]:
         return conn.execute(select(Instrument.instrument_token).where(
             Instrument.date == d, Instrument.underlying == underlying,
             Instrument.instrument_type == "EQ")).scalar()
+
+
+def token_for(engine: Engine, tradingsymbol: str, exchange: str = "NFO") -> Optional[int]:
+    """Instrument token from the most recent master that lists the symbol."""
+    with engine.connect() as conn:
+        return conn.execute(select(Instrument.instrument_token).where(
+            Instrument.tradingsymbol == tradingsymbol, Instrument.exchange == exchange)
+            .order_by(Instrument.date.desc()).limit(1)).scalar()

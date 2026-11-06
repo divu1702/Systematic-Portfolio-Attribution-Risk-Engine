@@ -118,6 +118,123 @@ def _cmd_scan(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_run(args: argparse.Namespace) -> int:
+    from .scheduler import build_scheduler
+
+    ctx = _ctx(args)
+    setup_logging(ctx.cfg.log_dir, level="INFO")
+    use_bot = bool(ctx.env.get("TELEGRAM_BOT_TOKEN") and ctx.env.get("TELEGRAM_CHAT_ID")) and not ctx.is_mock
+    sched = build_scheduler(ctx, blocking=not use_bot)
+    print(f"Scheduler running in {ctx.cfg.mode.upper()} mode{' on the synthetic market' if ctx.is_mock else ''}"
+          f"{' with the Telegram bot' if use_bot else ' (Telegram not configured: alerts go to the log)'}. "
+          "Ctrl+C to stop.")
+    try:
+        if use_bot:
+            from .reporting.telegram_bot import run_bot
+
+            sched.start()
+            run_bot(ctx)
+        else:
+            sched.start()
+    except (KeyboardInterrupt, SystemExit):
+        print("stopped")
+    return 0
+
+
+def _cmd_report(args: argparse.Namespace) -> int:
+    from .reporting.weekly import write_report
+
+    if args.db:
+        from .context import build_context
+
+        cfg = load_config(args.config)
+        ctx = build_context(cfg, mock=True, db_path=Path(args.db), env={})
+    else:
+        ctx = _ctx(args)
+    asof = date.fromisoformat(args.asof) if args.asof else None
+    if asof is None and args.db:
+        from .reporting.metrics import equity_series
+        eq = equity_series(ctx.engine)
+        asof = eq[-1].date if eq else None
+    print(f"report written to {write_report(ctx, asof)}")
+    return 0
+
+
+def _cmd_monitor(args: argparse.Namespace) -> int:
+    from .jobs import monitor_job
+
+    ctx = _ctx(args)
+    msgs = monitor_job(ctx, args.phase)
+    print("\n".join(msgs) if msgs else "No exits.")
+    return 0
+
+
+def _cmd_eod(args: argparse.Namespace) -> int:
+    from .jobs import eod_job
+
+    ctx = _ctx(args)
+    p = eod_job(ctx)
+    print(f"equity {p.equity:,.0f}  realised {p.realised:,.0f}  unrealised {p.unrealised:,.0f}  "
+          f"drawdown {p.drawdown:.1%}")
+    return 0
+
+
+def _cmd_status(args: argparse.Namespace) -> int:
+    from .views import status_report
+
+    print(status_report(_ctx(args)))
+    return 0
+
+
+def _cmd_kill(args: argparse.Namespace) -> int:
+    from .data import state
+
+    ctx = _ctx(args)
+    state.put(ctx.engine, state.KILLED, args.reason or "manual kill from the command line")
+    print("Kill switch set: no new entries. Exits keep running. Undo with `python -m app resume`.")
+    return 0
+
+
+def _cmd_resume(args: argparse.Namespace) -> int:
+    from .data import state
+
+    ctx = _ctx(args)
+    state.clear(ctx.engine, state.KILLED)
+    msg = "Kill switch cleared."
+    if args.drawdown:
+        state.clear(ctx.engine, state.DD_PAUSED)
+        msg += " Drawdown pause reset."
+    print(msg)
+    return 0
+
+
+def _cmd_sim(args: argparse.Namespace) -> int:
+    from .broker.synthetic import SyntheticMarket
+    from .clock import SystemClock
+    from .sim import make_sim_context, run_trading, sim_days, warmup
+    from .views import sim_summary
+
+    cfg = load_config(args.config)
+    if args.capital:
+        cfg = cfg.model_copy(update={"capital": float(args.capital)})
+    setup_logging(cfg.log_dir, level="WARNING")
+    today = SystemClock().today()
+    m = SyntheticMarket(seed=args.seed if args.seed is not None else cfg.broker.mock_seed,
+                        n_symbols=cfg.broker.mock_symbols, anchor=today, r=cfg.analytics.risk_free)
+    last = max(d for d in m.days if d <= today)
+    days = sim_days(m, last, args.warmup + args.days)
+    ctx = make_sim_context(cfg, days[0], market=m, db_path=Path(args.db) if args.db else None)
+    print(f"Synthetic market, seed {m.seed}: warm-up {args.warmup} days, then {args.days} trading days "
+          f"({days[args.warmup]} to {days[-1]}), capital {cfg.capital:,.0f}.", flush=True)
+    warmup(ctx, days[:args.warmup], progress=lambda i, n: print(f"  warm-up {i}/{n}", end="\r", flush=True))
+    print()
+    results = run_trading(ctx, days[args.warmup:], outage_prob=args.outages,
+                          progress=lambda i, n, r: print(f"  trading {i}/{n}", end="\r", flush=True))
+    print()
+    print(sim_summary(ctx, results))
+    return 0
+
+
 def _cmd_record(args: argparse.Namespace) -> int:
     from .recorder import record_fixtures
 
@@ -155,6 +272,49 @@ def build_parser() -> argparse.ArgumentParser:
                     help="with --mock: simulate N prior trading days first (fresh mock database)")
     sp.add_argument("--why", type=int, nargs="?", const=1, default=0, help="list each stock's rejection reason")
     sp.set_defaults(func=_cmd_scan)
+
+    sp = sub.add_parser("run", help="start the scheduler (paper mode by default)")
+    sp.add_argument("--mock", action="store_true", help="use the synthetic market")
+    sp.set_defaults(func=_cmd_run)
+
+    sp = sub.add_parser("monitor", help="mark open spreads now and apply the exit rules")
+    sp.add_argument("--phase", choices=["regular", "gap", "thesis"], default="regular")
+    sp.add_argument("--mock", action="store_true")
+    sp.set_defaults(func=_cmd_monitor)
+
+    sp = sub.add_parser("eod", help="run the end-of-day job now")
+    sp.add_argument("--mock", action="store_true")
+    sp.set_defaults(func=_cmd_eod)
+
+    sp = sub.add_parser("status", help="open positions, equity, kill switches")
+    sp.add_argument("--mock", action="store_true")
+    sp.set_defaults(func=_cmd_status)
+
+    sp = sub.add_parser("kill", help="stop new entries (exits keep running)")
+    sp.add_argument("reason", nargs="?")
+    sp.add_argument("--mock", action="store_true")
+    sp.set_defaults(func=_cmd_kill)
+
+    sp = sub.add_parser("resume", help="clear the kill switch")
+    sp.add_argument("--drawdown", action="store_true", help="also reset the drawdown pause")
+    sp.add_argument("--mock", action="store_true")
+    sp.set_defaults(func=_cmd_resume)
+
+    sp = sub.add_parser("sim", help="end-to-end paper simulation on the synthetic market")
+    sp.add_argument("--warmup", type=int, default=130, help="days of IV history to build first")
+    sp.add_argument("--days", type=int, default=60, help="trading days to simulate")
+    sp.add_argument("--capital", type=float, help="override capital for this run")
+    sp.add_argument("--seed", type=int, help="synthetic market seed")
+    sp.add_argument("--outages", type=float, default=0.0,
+                    help="probability per day of a 2-hour outage (exercises missed-mark replay)")
+    sp.add_argument("--db", help="database file for this run (default data/trading_mock.db)")
+    sp.set_defaults(func=_cmd_sim)
+
+    sp = sub.add_parser("report", help="write the weekly HTML report now")
+    sp.add_argument("--mock", action="store_true")
+    sp.add_argument("--db", help="report on a specific database (e.g. a simulation run)")
+    sp.add_argument("--asof", help="YYYY-MM-DD (default: today, or the last equity date with --db)")
+    sp.set_defaults(func=_cmd_report)
 
     sp = sub.add_parser("record", help="save real Kite responses as offline test fixtures")
     sp.add_argument("symbols", nargs="+")

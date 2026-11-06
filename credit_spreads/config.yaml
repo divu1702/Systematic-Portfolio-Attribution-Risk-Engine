@@ -66,7 +66,7 @@ risk:
   daily_stop: 0.03
   dd_pause: 0.10
 paper: {extra_slip_ticks: 1, margin_fallback_mult: 1.5}   # + margin_fallback_mult
-live: {require_approval: true, max_ops: 2, step_secs: 20, entry_steps: 3, stop_steps: 6}
+live: {require_approval: true, max_ops: 2, step_secs: 20, entry_steps: 3, stop_steps: 6, approval_timeout_min: 20}
 schedule:                                             # + all times IST
   instruments_refresh: "08:30"
   events_fetch: "08:45"

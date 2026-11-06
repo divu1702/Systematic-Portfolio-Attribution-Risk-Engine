@@ -90,6 +90,7 @@ class ScanResult:
     outcomes: List[StockOutcome]
     ranked: List[SpreadCandidate]
     selected: List[SpreadCandidate]
+    entry_messages: List[str] = field(default_factory=list)
 
     @property
     def funnel(self) -> "OrderedDict[str, int]":

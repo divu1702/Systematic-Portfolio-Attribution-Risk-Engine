@@ -2,8 +2,13 @@
 pydantic>=2.5
 PyYAML>=6.0
 SQLAlchemy>=2.0
-kiteconnect>=5.0        # Kite Connect app (paid plan) for market data; installs `requests`
+kiteconnect>=5.0          # Kite Connect app (paid plan) for market data; installs `requests`
 pandas>=2.0
 numpy>=2.0
-scipy>=1.11             # Brent's method IV solver
+scipy>=1.11               # Brent's method IV solver
+APScheduler>=3.10,<4
+python-telegram-bot>=21
+jinja2>=3.1               # weekly HTML report
 pytest>=7.4
+
+# Optional dashboard:  pip install streamlit

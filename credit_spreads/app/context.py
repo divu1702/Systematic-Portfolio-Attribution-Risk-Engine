@@ -58,7 +58,13 @@ def build_context(cfg: Config, *, mock: Optional[bool] = None, clock: Optional[C
         broker = KiteBroker(cfg, env, clock)
         path = db_path or cfg.db_path
     engine = init_db(path)
-    ctx = Context(cfg, env, clock, engine, broker, notifier or LogNotifier(), is_mock=is_mock)
+    if notifier is None:
+        notifier = LogNotifier()
+        if not is_mock and env.get("TELEGRAM_BOT_TOKEN") and env.get("TELEGRAM_CHAT_ID"):
+            from .reporting.telegram_bot import TelegramNotifier
+
+            notifier = TelegramNotifier(env["TELEGRAM_BOT_TOKEN"], env["TELEGRAM_CHAT_ID"], fallback=notifier)
+    ctx = Context(cfg, env, clock, engine, broker, notifier, is_mock=is_mock)
     from .data.nse import make_nse_source  # local import: nse depends on context-free modules only
 
     ctx.nse = make_nse_source(ctx)

@@ -37,17 +37,34 @@ def catch_up_daily(ctx, through: date) -> None:
     refdata.refresh_turnover(ctx, through, ctx.cfg.universe.turnover_window)
 
 
-def scan_job(ctx):
+def scan_job(ctx, enter: bool = False):
+    """15:00: scan; with enter=True, send the top candidates through sizing, limits and fills."""
     from .strategy.scanner import run_scan
 
     cal = TradingCalendar.load(ctx.engine)
     catch_up_daily(ctx, cal.prev_trading_day(ctx.clock.today()))
     if not events.is_fresh(ctx.engine, ctx.clock.now(), ctx.cfg.events.max_staleness_days):
         events.fetch_events(ctx)
-    return run_scan(ctx)
+    result = run_scan(ctx)
+    if enter:
+        from .execution.entries import enter_from_scan
+        from .execution.router import get_executor
+
+        result.entry_messages = enter_from_scan(ctx, get_executor(ctx), result)
+    return result
 
 
-def eod_job(ctx) -> None:
-    """15:35: today's final candles, levels and turnover; events refresh."""
+def monitor_job(ctx, phase: str = "regular"):
+    from .execution.router import get_executor
+    from .monitor.exits import run_monitor
+
+    return run_monitor(ctx, get_executor(ctx), phase)
+
+
+def eod_job(ctx):
+    """15:35: today's final candles, levels and turnover; events refresh; equity and drawdown."""
+    from .risk.equity import eod_equity
+
     catch_up_daily(ctx, ctx.clock.today())
     events.fetch_events(ctx)
+    return eod_equity(ctx)
