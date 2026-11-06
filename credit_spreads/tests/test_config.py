@@ -19,10 +19,10 @@ def test_shipped_config_loads_with_spec_defaults():
     assert cfg.costs.stt_sell_premium == 0.0015
 
 
-def test_exchange_txn_charge_is_left_for_owner():
+def test_exchange_txn_charge_is_set():
     cfg = load_config()
-    assert cfg.costs.exchange_txn_pct is None
-    assert cfg.costs.missing == ["exchange_txn_pct"]
+    assert cfg.costs.exchange_txn_pct == 0.0003503
+    assert cfg.costs.missing == []
 
 
 def test_pydantic_defaults_match_shipped_file():

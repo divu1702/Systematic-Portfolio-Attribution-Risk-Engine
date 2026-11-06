@@ -29,3 +29,30 @@ def write_config(tmp_path: Path):
 @pytest.fixture
 def cfg(raw_config, write_config):
     return load_config(write_config(raw_config))
+
+
+# ----------------------------------------------------------------------------- mock market
+from datetime import datetime
+
+from app.broker.synthetic import SyntheticMarket
+from app.clock import SimClock
+
+SIM_NOW = datetime(2026, 11, 6, 15, 0)
+_MARKETS = {}
+
+
+def shared_market(n_symbols: int = 8, seed: int = 7, anchor=SIM_NOW.date()) -> SyntheticMarket:
+    """Synthetic markets are deterministic and read-only, so tests share them for speed."""
+    key = (n_symbols, seed, anchor)
+    if key not in _MARKETS:
+        _MARKETS[key] = SyntheticMarket(seed=seed, n_symbols=n_symbols, anchor=anchor)
+    return _MARKETS[key]
+
+
+@pytest.fixture
+def mock_ctx(cfg, tmp_path):
+    from app.context import build_context
+
+    clock = SimClock(SIM_NOW)
+    return build_context(cfg, mock=True, clock=clock, db_path=tmp_path / "mock.db", env={},
+                         market=shared_market())

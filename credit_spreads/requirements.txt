@@ -1,15 +1,9 @@
-# Milestone 1 (skeleton)
+# Suggested stack from the build spec. PyYAML is the one addition (reads config.yaml).
 pydantic>=2.5
 PyYAML>=6.0
 SQLAlchemy>=2.0
+kiteconnect>=5.0        # Kite Connect app (paid plan) for market data; installs `requests`
+pandas>=2.0
+numpy>=1.26
+scipy>=1.11             # Brent's method IV solver
 pytest>=7.4
-
-# Later milestones (from the spec's suggested stack); installed as each milestone starts
-# kiteconnect        # M2: broker and market data (Kite Connect app, ₹500/month)
-# pandas             # M3
-# numpy              # M3
-# scipy              # M3: Brent's method IV solver
-# APScheduler        # M6
-# python-telegram-bot  # M7
-# jinja2             # M7: weekly report
-# streamlit          # M7, optional dashboard

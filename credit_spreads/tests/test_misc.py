@@ -42,7 +42,7 @@ def test_doctor_before_and_after_migrate(raw_config, write_config, tmp_path):
     assert run_doctor(cfg_path, out, env_path=tmp_path / ".env") == 0
     text = out.getvalue()
     assert "PAPER" in text and "₹5,00,000" in text
-    assert "not created" in text and "exchange txn charge" in text
+    assert "not created" in text and "0.0350%" in text
     assert secret not in text
 
     assert main(["--config", str(cfg_path), "migrate"]) == 0

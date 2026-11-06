@@ -42,6 +42,13 @@ class UniverseCfg(_Section):
 class EventsCfg(_Section):
     buffer_days: NonNegInt = 1
     max_staleness_days: NonNegInt = 2
+    fetch_ahead_days: PosInt = 60
+    fetch_behind_days: PosInt = 120
+    # Fail-closed extra: if no results date is announced yet, estimate the next one from the
+    # last known results date + cycle, and treat it as an event if it lands near the window.
+    estimate_results: bool = True
+    results_cycle_days: PosInt = 91
+    results_tolerance_days: NonNegInt = 10
 
 
 class IVCfg(_Section):
@@ -66,6 +73,9 @@ class LevelsCfg(_Section):
     lookback: PosInt = 250
     cluster_atr: Annotated[float, Field(gt=0)] = 0.5
     min_buffer_atr: NonNegFloat = 0.25
+    recency_halflife: PosInt = 60          # bars; a touch this old counts half
+    weekly_weight: Annotated[float, Field(gt=0)] = 2.0
+    manual_score: Annotated[float, Field(gt=0)] = 10.0
 
 
 class DirectionCfg(_Section):
@@ -111,6 +121,40 @@ class AnalyticsCfg(_Section):
     hv_window: PosInt = 20
     atr_window: PosInt = 14
     trading_days_per_year: PosInt = 252
+    risk_free: Annotated[float, Field(ge=0, lt=1)] = 0.065
+    iv_min: Annotated[float, Field(gt=0)] = 0.01
+    iv_max: Annotated[float, Field(gt=0)] = 5.0
+
+
+class BrokerCfg(_Section):
+    provider: Literal["kite", "mock"] = "kite"
+    redirect_url: str = "http://127.0.0.1:5000/kite/callback"
+    quote_batch: Annotated[int, Field(ge=1, le=500)] = 500
+    quote_rps: Annotated[float, Field(gt=0, le=1)] = 1.0     # Kite quote API limit: 1 req/s
+    hist_rps: Annotated[float, Field(gt=0, le=3)] = 3.0      # Kite historical API limit: 3 req/s
+    mock_seed: NonNegInt = 7
+    mock_symbols: Annotated[int, Field(ge=1, le=60)] = 20
+
+
+class ScanCfg(_Section):
+    top_n: PosInt = 5
+
+
+class MonitorCfg(_Section):
+    replay_missed: bool = True
+
+
+class ReportingCfg(_Section):
+    weekly_day: Literal["mon", "tue", "wed", "thu", "fri", "sat", "sun"] = "fri"
+    weekly_time: str = "16:00"
+    out_dir: str = "reports"
+
+    @field_validator("weekly_time")
+    @classmethod
+    def _hhmm(cls, v: str) -> str:
+        if not _HHMM.match(v):
+            raise ValueError(f"expected HH:MM (24h IST), got {v!r}")
+        return v
 
 
 class ExitCfg(_Section):
@@ -162,6 +206,8 @@ class LiveCfg(_Section):
 
 
 class ScheduleCfg(_Section):
+    instruments_refresh: str = "08:30"
+    events_fetch: str = "08:45"
     login_reminder: str = "09:00"
     gap_check: str = "09:20"
     scan: str = "15:00"
@@ -171,7 +217,8 @@ class ScheduleCfg(_Section):
     no_entry_start: str = "09:15"
     no_entry_end: str = "09:20"
 
-    @field_validator("login_reminder", "gap_check", "scan", "thesis_exit", "eod",
+    @field_validator("instruments_refresh", "events_fetch", "login_reminder", "gap_check",
+                     "scan", "thesis_exit", "eod",
                      "no_entry_start", "no_entry_end")
     @classmethod
     def _hhmm(cls, v: str) -> str:
@@ -195,8 +242,8 @@ class KillSwitchCfg(_Section):
 class CostsCfg(_Section):
     brokerage_per_order: NonNegFloat = 20
     stt_sell_premium: NonNegFloat = 0.0015
-    # Deliberately no default: the owner must supply the current NSE rate.
-    exchange_txn_pct: Optional[NonNegFloat] = None
+    # NSE options transaction charge on premium (Zerodha charges page, Nov 2026: 0.03503%).
+    exchange_txn_pct: Optional[NonNegFloat] = 0.0003503
     sebi_fee_per_crore: NonNegFloat = 10
     stamp_buy_pct: NonNegFloat = 0.00003
     gst: NonNegFloat = 0.18
@@ -212,6 +259,10 @@ class PathsCfg(_Section):
     logs: str = "logs"
     levels_manual: str = "levels_manual.csv"
     events_override: str = "events_override.csv"
+    sectors_manual: str = "sectors_manual.csv"
+    holidays_manual: str = "holidays_manual.csv"
+    kite_session: str = "data/kite_session.json"
+    fixtures: str = "fixtures"
 
 
 class Config(_Section):
@@ -229,6 +280,10 @@ class Config(_Section):
     ev: EVCfg = EVCfg()
     liquidity: LiquidityCfg = LiquidityCfg()
     analytics: AnalyticsCfg = AnalyticsCfg()
+    broker: BrokerCfg = BrokerCfg()
+    scan: ScanCfg = ScanCfg()
+    monitor: MonitorCfg = MonitorCfg()
+    reporting: ReportingCfg = ReportingCfg()
     exit: ExitCfg = ExitCfg()
     risk: RiskCfg = RiskCfg()
     paper: PaperCfg = PaperCfg()

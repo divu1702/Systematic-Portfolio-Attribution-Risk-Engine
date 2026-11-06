@@ -8,7 +8,14 @@ capital: 500000
 universe: {top_n: 50, turnover_window: 20}            # + turnover_window
 dte_min: 15
 dte_max: 35
-events: {buffer_days: 1, max_staleness_days: 2}
+events:
+  buffer_days: 1
+  max_staleness_days: 2
+  fetch_ahead_days: 60       # +
+  fetch_behind_days: 120     # + past results dates feed F5 and the results estimate
+  estimate_results: true     # + fail closed when the next results date is not yet announced
+  results_cycle_days: 91     # +
+  results_tolerance_days: 10 # +
 iv:
   min_iv_hv_ratio: 1.25
   min_ivp: 70
@@ -18,13 +25,31 @@ iv:
   spike_lookback: 10
   spike_move_atr: 1.5    # + F5: price move that explains the IV spike, in ATR(14)
   atm_min_dte: 10        # + ATM IV uses the nearest monthly expiry with at least this many days left
-levels: {fractal_n: 5, lookback: 250, cluster_atr: 0.5, min_buffer_atr: 0.25}
+levels:
+  fractal_n: 5
+  lookback: 250
+  cluster_atr: 0.5
+  min_buffer_atr: 0.25
+  recency_halflife: 60       # + bars; a touch this old counts half in the score
+  weekly_weight: 2.0         # + weekly swings count double
+  manual_score: 10.0         # + score given to levels from levels_manual.csv
 direction: {max_dist_atr: 1.5}                        # + price within this many ATR of a scored level
 strikes: {delta_min: 0.20, delta_max: 0.30, min_dist_atr: 1.0}
 spread: {widths_steps: [1, 2, 3, 4], min_credit_width: 0.25}
 ev: {hv_weight: 0.5, min_ev_ratio: 0.03}
 liquidity: {max_spread_pct: 0.05, min_oi_lots: 500, min_vol_lots: 50}
-analytics: {hv_window: 20, atr_window: 14, trading_days_per_year: 252}   # +
+analytics: {hv_window: 20, atr_window: 14, trading_days_per_year: 252, risk_free: 0.065, iv_min: 0.01, iv_max: 5.0}   # +
+broker:                                               # +
+  provider: kite           # kite | mock (synthetic market, for tests and demos)
+  redirect_url: "http://127.0.0.1:5000/kite/callback"
+  quote_batch: 500
+  quote_rps: 1.0
+  hist_rps: 3.0
+  mock_seed: 7
+  mock_symbols: 20
+scan: {top_n: 5}                                      # + candidates sent to sizing per scan
+monitor: {replay_missed: true}                        # + replay missed 5-min marks from candles
+reporting: {weekly_day: fri, weekly_time: "16:00", out_dir: reports}   # +
 exit:
   stop_mult: 2.0
   tp_frac: 0.50
@@ -43,6 +68,8 @@ risk:
 paper: {extra_slip_ticks: 1, margin_fallback_mult: 1.5}   # + margin_fallback_mult
 live: {require_approval: true, max_ops: 2, step_secs: 20, entry_steps: 3, stop_steps: 6}
 schedule:                                             # + all times IST
+  instruments_refresh: "08:30"
+  events_fetch: "08:45"
   login_reminder: "09:00"
   gap_check: "09:20"
   scan: "15:00"
@@ -55,7 +82,7 @@ killswitch: {stale_quote_secs: 60, max_rejections_per_day: 3, reconcile_every_mi
 costs:                 # update when broker or exchange rates change
   brokerage_per_order: 20
   stt_sell_premium: 0.0015
-  exchange_txn_pct: null  # fill from current NSE circular
+  exchange_txn_pct: 0.0003503  # NSE 0.03503% of premium (zerodha.com/charges, Nov 2026)
   sebi_fee_per_crore: 10
   stamp_buy_pct: 0.00003
   gst: 0.18
@@ -64,3 +91,7 @@ paths:                                                # + relative to this file'
   logs: logs
   levels_manual: levels_manual.csv
   events_override: events_override.csv
+  sectors_manual: sectors_manual.csv
+  holidays_manual: holidays_manual.csv
+  kite_session: data/kite_session.json   # today's access token only; expires next morning
+  fixtures: fixtures
