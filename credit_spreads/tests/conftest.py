@@ -70,6 +70,7 @@ def relaxed_cfg(raw_config, write_config):
     r["strikes"] = {"delta_min": 0.05, "delta_max": 0.45, "min_dist_atr": 0.0}
     r["spread"]["min_credit_width"] = 0.05
     r["ev"]["min_ev_ratio"] = 0.0
+    r["ev"]["method"] = "expiry"     # mechanics tests need accepted spreads; path EV is tested on its own
     r["liquidity"] = {"max_spread_pct": 0.2, "min_oi_lots": 0, "min_vol_lots": 0}
     return load_config(write_config(r))
 

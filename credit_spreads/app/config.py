@@ -112,6 +112,11 @@ class SpreadCfg(_Section):
 class EVCfg(_Section):
     hv_weight: Annotated[float, Field(ge=0, le=1)] = 0.5
     min_ev_ratio: NonNegFloat = 0.03
+    # Owner: "paths" simulates the exit rules along price paths; "expiry" is the spec's formula.
+    method: Literal["paths", "expiry"] = "paths"
+    n_paths: Annotated[int, Field(ge=100, le=100_000)] = 2000
+    steps_per_day: Annotated[int, Field(ge=1, le=75)] = 6    # rule checks per simulated day
+    seed: NonNegInt = 7
 
 
 class LiquidityCfg(_Section):

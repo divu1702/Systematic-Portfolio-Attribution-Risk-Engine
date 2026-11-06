@@ -96,6 +96,14 @@ These could not be verified offline (the build machine has no access to Zerodha 
 - Every F&O stock is scanned. A spread qualifies on liquidity if both legs have a two-sided quote with
   bid-ask within 5% of mid and enough bids and asks in the 5-level book to fill the planned size.
 
+## How EV is estimated
+
+For each candidate spread the scanner simulates 2,000 price paths to the time stop and applies the
+exit rules along each path (hard stop, thesis stop at the daily close, profit target), closing the
+rest at the time stop. EV is the average P&L after costs and the cost of crossing the bid-ask to
+close; p_model is the share of paths that make money. A spread needs EV > 0 and EV >= 3% of max loss.
+IV is held at its entry level in the simulation, so any fall in IV after entry is upside it ignores.
+
 ## Configuration
 
 Every threshold is in `config.yaml`, validated on load; unknown keys are an error. Keys marked `# +` are

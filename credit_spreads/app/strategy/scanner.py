@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import logging
 import math
+import zlib
 from collections import OrderedDict
 from dataclasses import asdict, dataclass, field
 from datetime import date, datetime, timedelta
@@ -297,6 +298,12 @@ def evaluate_stock(ctx, symbol: str, today: date, cal: TradingCalendar, equity: 
     base.lot_size = lot
     buf = cfg.levels.min_buffer_atr * atr
     rows: List[SpreadCandidate] = []
+    # Path-simulation horizon: from now to the time stop (N trading days before expiry).
+    n_days = max(1, cal.trading_days_between(today, trade_exp) - cfg.exit.days_before_expiry)
+    stop_day = today
+    for _ in range(n_days):
+        stop_day = cal.next_trading_day(stop_day)
+    T_exit = market.years_to_expiry(trade_exp, datetime.combine(stop_day, market.EXPIRY_TIME))
     any_f6 = any_f7 = any_liq = any_f8 = any_budget = any_depth = False
     strikes = [k for k in chain.strikes if (k < spot if side == BULL_PUT else k > spot)]
     for k in strikes:
@@ -361,10 +368,19 @@ def evaluate_stock(ctx, symbol: str, today: date, cal: TradingCalendar, equity: 
                 continue
             c.flags["f9"] = True
             any_depth = True
-            r = evmod.evaluate(side, F, m.breakeven, snap.T, oiv.iv, hv20, m.credit, m.width, lot,
-                               cfg.ev.hv_weight, cfg.exit.stop_mult)
+            if cfg.ev.method == "paths":
+                liv = snap.iv(long_k, cp)
+                r = evmod.evaluate_paths(
+                    side, F, k, long_k, oiv.iv, (liv.iv if liv and liv.iv else oiv.iv), hv20, snap.T, T_exit,
+                    n_days, gross, m.credit, m.width, lot, (qs.ask - qs.bid) / 2, (ql.ask - ql.bid) / 2,
+                    level.price, cfg, seed=cfg.ev.seed ^ zlib.crc32(f"{symbol}|{k}|{long_k}|{today}".encode()))
+                c.inputs.update(exit_mix=r.exit_mix, pnl_p05=r.pnl_p05, sim_days=n_days,
+                                ev_per_risk=r.ev / c.risk_per_lot if c.risk_per_lot else None)
+            else:
+                r = evmod.evaluate(side, F, m.breakeven, snap.T, oiv.iv, hv20, m.credit, m.width, lot,
+                                   cfg.ev.hv_weight, cfg.exit.stop_mult)
             c.p_market, c.p_model, c.ev, c.ev_ratio = r.p_market, r.p_model, r.ev, r.ev_ratio
-            c.inputs.update(sigma_model=r.sigma_model, avg_loss=r.avg_loss)
+            c.inputs.update(sigma_model=r.sigma_model, avg_loss=r.avg_loss, ev_method=cfg.ev.method)
             if not (r.ev > 0 and r.ev_ratio >= cfg.ev.min_ev_ratio):
                 c.reject_reason = f"EV: {r.ev_ratio:.1%} of max loss < {cfg.ev.min_ev_ratio:.1%}"
     accepted = [c for c in rows if c.accepted]

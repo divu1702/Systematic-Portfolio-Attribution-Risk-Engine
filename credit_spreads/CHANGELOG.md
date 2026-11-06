@@ -15,6 +15,12 @@ Each entry names the keys changed, old and new values, and the evidence.
 - Liquidity judged in absolute terms per option leg: two-sided quote, bid-ask <= 5% of mid, and the
   5-level book on bid and ask of both legs must cover the order size (`liquidity.min_depth_cover: 1.0`).
   OI and volume minimums off (`min_oi_lots: 0`, `min_vol_lots: 0`, were 500 / 50).
+- EV now comes from a path simulation of the exit rules (`ev.method: paths`): 2,000 price paths at
+  the forecast vol, checked 6 times a day for the hard stop, the thesis stop (daily) and the profit
+  target, closed at the time stop otherwise; legs repriced with Black-76 at entry IV, natural prices
+  via the entry half-spreads. p_model is the share of paths that make money after costs. The spec's
+  expiry formula stays available as `ev.method: expiry`. Example: 470/460 put on a 500 stock, credit
+  2.60, IV 40%, HV 30%: expiry formula EV 18.3% of max loss; with the exit rules about 1.5%.
 
 ### Milestones 2-7
 - Broker and data layer, analytics, levels and events, scanner, paper engine with monitor and

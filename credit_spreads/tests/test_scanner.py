@@ -171,3 +171,77 @@ def test_relaxed_scan_produces_ranked_spreads(relaxed_cfg, tmp_path):
     inputs = json.loads(acc[0]["inputs_json"])
     for key in ("spot", "atr14", "hv20", "atm_iv", "level", "short_quote", "round_trip_costs", "ivp_method"):
         assert key in inputs
+
+
+# ----------------------------------------------------------------------------- path-simulation EV
+
+def _paths_cfg():
+    return load_config()
+
+
+def _put_spread(iv=0.40):
+    from app.analytics import black76 as b
+    F, T = 500.0, 25 / 365
+    credit = b.price(F, 470, T, iv, 0.065, "PE") - b.price(F, 460, T, iv, 0.065, "PE")
+    return F, T, credit
+
+
+def test_paths_without_rules_are_fair_at_market_vol():
+    """No stop, no target, held to expiry, vol = IV: expected P&L ~ 0 (risk-neutral pricing)."""
+    import numpy as np
+    from app.strategy.ev import simulate_exits
+
+    F, T, credit = _put_spread()
+    z = np.random.default_rng(0).standard_normal((40_000, 25))
+    pnl, why = simulate_exits(BULL_PUT, F, 470, 460, 0.40, 0.40, 0.40, T, 0.0, 25, credit, credit, 0, 0, None,
+                              1e9, -1.0, False, 0.0, z, 1)
+    assert (why == 3).all()
+    assert abs(pnl.mean()) < 0.06 * credit
+
+
+def test_path_ev_vs_expiry_formula():
+    from app.strategy.ev import evaluate, evaluate_paths
+
+    cfg = _paths_cfg()
+    F, T, credit = _put_spread()
+    old = evaluate(BULL_PUT, F, 470 - credit, T, 0.40, 0.30, credit, 10, 1, 0.5, 2.0)
+    new = evaluate_paths(BULL_PUT, F, 470, 460, 0.40, 0.40, 0.30, T, 7 / 365, 13, credit, credit, 10, 1,
+                         0.0, 0.0, None, cfg, seed=1)
+    assert sum(new.exit_mix.values()) == pytest.approx(1.0)
+    assert new.exit_mix["hard_stop"] > 0.15                  # stops fire mid-trade
+    assert new.p_model < old.p_model                         # expiry formula overstates the win rate
+    assert new.ev_ratio < old.ev_ratio
+    again = evaluate_paths(BULL_PUT, F, 470, 460, 0.40, 0.40, 0.30, T, 7 / 365, 13, credit, credit, 10, 1,
+                           0.0, 0.0, None, cfg, seed=1)
+    assert again == new                                      # same inputs, same EV
+
+
+def test_path_ev_rewards_rich_iv_and_punishes_cheap_iv():
+    from app.strategy.ev import evaluate_paths
+
+    cfg = _paths_cfg()
+    F, T, credit = _put_spread(iv=0.60)
+    rich = evaluate_paths(BULL_PUT, F, 470, 460, 0.60, 0.60, 0.20, T, 7 / 365, 13, credit, credit, 10, 1,
+                          0.0, 0.0, None, cfg, seed=2)
+    cheap = evaluate_paths(BULL_PUT, F, 470, 460, 0.60, 0.60, 0.90, T, 7 / 365, 13, credit, credit, 10, 1,
+                           0.0, 0.0, None, cfg, seed=2)
+    assert rich.ev > 0 > cheap.ev
+    assert rich.p_model > cheap.p_model
+
+
+def test_thesis_stop_and_half_spread_cost():
+    from app.strategy.ev import evaluate_paths
+
+    cfg = _paths_cfg()
+    F, T, credit = _put_spread()
+    base = dict(side=BULL_PUT, F=F, short_k=470, long_k=460, iv_short=0.4, iv_long=0.4, hv20=0.3, T0=T,
+                T_exit=7 / 365, n_days=13, credit_gross=credit, credit_nat=credit, width=10, lot=1, cfg=cfg, seed=3)
+    no_level = evaluate_paths(half_short=0, half_long=0, level=None, **base)
+    with_level = evaluate_paths(half_short=0, half_long=0, level=495.0, **base)
+    assert no_level.exit_mix["thesis_stop"] == 0 and with_level.exit_mix["thesis_stop"] > 0.2
+    wide = evaluate_paths(half_short=0.3, half_long=0.3, level=None, **base)
+    assert wide.ev < no_level.ev                              # paying the spread to close costs money
+
+
+def test_default_scan_uses_path_ev(cfg):
+    assert cfg.ev.method == "paths" and cfg.ev.n_paths == 2000

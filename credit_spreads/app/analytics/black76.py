@@ -120,3 +120,29 @@ def prob_above(F: float, X: float, T: float, sigma: float) -> float:
 def year_fraction(seconds: float) -> float:
     """Calendar-time year fraction."""
     return max(seconds, 0.0) / (365.0 * 86400.0)
+
+
+def price_vec(F, K: float, T, sigma: float, r: float, cp: str):
+    """Vectorised Black-76 price over arrays of forwards (and optionally times). Same maths as
+    `price`, used by the path simulation in strategy/ev.py."""
+    import numpy as np
+    from scipy.special import ndtr
+
+    is_call = _check(cp)
+    F = np.asarray(F, dtype=float)
+    T = np.broadcast_to(np.asarray(T, dtype=float), F.shape)
+    df = np.exp(-r * T)
+    intrinsic = np.maximum(F - K, 0.0) if is_call else np.maximum(K - F, 0.0)
+    out = df * intrinsic
+    live = (T > 0) & (sigma > 0)
+    if np.any(live):
+        Fl, Tl = F[live], T[live]
+        sv = sigma * np.sqrt(Tl)
+        d1 = (np.log(Fl / K) + 0.5 * sv * sv) / sv
+        d2 = d1 - sv
+        dfl = df[live]
+        if is_call:
+            out[live] = dfl * (Fl * ndtr(d1) - K * ndtr(d2))
+        else:
+            out[live] = dfl * (K * ndtr(-d2) - Fl * ndtr(-d1))
+    return out
