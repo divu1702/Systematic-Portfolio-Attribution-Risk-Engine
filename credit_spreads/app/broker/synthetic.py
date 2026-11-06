@@ -266,14 +266,21 @@ class SyntheticMarket:
     def listed_expiries(self, d: date, n: int = 3) -> List[date]:
         return [e for e in self.expiries if e >= d][:n]
 
-    def strike_grid(self, name: str, expiry: date) -> List[float]:
-        key = (name, expiry)
+    def strike_grid(self, name: str, expiry: date, d: Optional[date] = None) -> List[float]:
+        """Strikes listed for an expiry as of day d: the step is fixed at contract launch (about
+        three months before expiry) and strikes are added as the stock moves, never removed."""
+        ei = self.day_index[expiry]
+        launch = max(0, ei - 63)
+        di = self.day_index.get(d, ei) if d else ei
+        di = max(launch, min(di, ei))
+        key = (name, expiry, di)
         if key not in self._strike_grid_cache:
-            ei = self.day_index[expiry]
-            ref = float(self.paths[name][max(0, ei - 63), 0])
+            closes = self.paths[name][launch:di + 1, -1]
+            ref = float(self.paths[name][launch, 0])
             step = strike_step(ref)
-            lo, hi = math.ceil(ref * 0.5 / step), math.floor(ref * 1.6 / step)
-            self._strike_grid_cache[key] = [float(round(i * step, 2)) for i in range(lo, hi + 1)]
+            lo = math.ceil(min(ref, float(closes.min())) * 0.6 / step)
+            hi = math.floor(max(ref, float(closes.max())) * 1.4 / step)
+            self._strike_grid_cache[key] = [float(round(i * step, 2)) for i in range(max(lo, 1), hi + 1)]
         return self._strike_grid_cache[key]
 
     def _register(self, info: InstrumentInfo) -> InstrumentInfo:
@@ -296,7 +303,7 @@ class SyntheticMarket:
                 fut = self._register(InstrumentInfo(_crc("FUT", spec.name, e) % 10**8, "NFO",
                                                     f"{spec.name}{yy}{mon}FUT", spec.name, "FUT", e, None, spec.lot))
                 rows.append(self._kite_row(fut, "NFO-FUT", spec))
-                for k in self.strike_grid(spec.name, e):
+                for k in self.strike_grid(spec.name, e, d):
                     for cp in ("CE", "PE"):
                         info = self._register(InstrumentInfo(
                             _crc("OPT", spec.name, e, fmt_strike(k), cp) % 10**8, "NFO",

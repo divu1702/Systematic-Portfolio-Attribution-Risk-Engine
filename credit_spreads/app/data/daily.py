@@ -45,18 +45,24 @@ def update_underlying_daily(ctx, symbols: Iterable[str], through: date, history_
                 conn.execute(stmt.on_conflict_do_update(index_elements=["date", "symbol"], set_={
                     "open": stmt.excluded.open, "high": stmt.excluded.high, "low": stmt.excluded.low,
                     "close": stmt.excluded.close, "volume": stmt.excluded.volume}))
-        _recompute(ctx.engine, sym, a.atr_window, a.hv_window, a.trading_days_per_year)
+        _recompute(ctx.engine, sym, a.atr_window, a.hv_window, a.trading_days_per_year,
+                   since=rows[0]["date"].date())
         n += 1
     return n
 
 
-def _recompute(engine: Engine, sym: str, atr_n: int, hv_n: int, per_year: int) -> None:
+def _recompute(engine: Engine, sym: str, atr_n: int, hv_n: int, per_year: int,
+               since: Optional[date] = None) -> None:
+    """Recompute indicators over the full series, but only write rows from `since` on (earlier
+    values do not change when new bars are appended)."""
     df = load_daily(engine, sym)
     if df.empty:
         return
     df["atr14"] = vol.atr(df["high"], df["low"], df["close"], atr_n)
     df["hv20"] = vol.hv(df["close"], hv_n, per_year)
     df["hv_pctile_252"] = vol.rolling_percentile_rank(df["hv20"], 252)
+    if since is not None:
+        df = df[df.index >= since]
     with engine.begin() as conn:
         for d, r in df.iterrows():
             conn.execute(update(UnderlyingDaily).where(UnderlyingDaily.symbol == sym, UnderlyingDaily.date == d)

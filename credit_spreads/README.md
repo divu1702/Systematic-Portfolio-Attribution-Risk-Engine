@@ -4,7 +4,7 @@ Scans liquid NSE stock options daily, finds defined-risk credit spreads (bull pu
 when implied volatility is unusually rich, and paper-trades them with deliberately pessimistic fills.
 Live order placement is built last and stays off until the spec's go-live criteria are met.
 
-**Status:** milestones 1-4 complete.
+**Status:** milestones 1-5 complete.
 
 | # | Milestone | Status |
 |---|-----------|--------|
@@ -12,7 +12,7 @@ Live order placement is built last and stays off until the spec's go-live criter
 | 2 | Broker and data layer (Kite Connect, MockBroker) | done |
 | 3 | Analytics (Black-76, IV solver, HV, ATR) | done |
 | 4 | Levels and events | done |
-| 5 | Scanner (F1–F9, EV ranking) | |
+| 5 | Scanner (F1–F9, EV ranking) | done |
 | 6 | Paper engine, monitor, scheduler | |
 | 7 | Reporting and Telegram | |
 | 8 | Live adapter (only when the owner asks) | |

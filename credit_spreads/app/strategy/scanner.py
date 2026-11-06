@@ -1,0 +1,431 @@
+"""Daily scanner (spec: Entry filters, Strike selection and spread construction).
+
+For each F&O stock: F1 universe -> DTE window -> IV snapshot (stored for every universe stock)
+-> F2 events -> F3 IV/HV -> F4 IV percentile (true or HV-percentile proxy) -> F5 cause passed
+-> direction from levels -> enumerate short strikes (F6 level buffer, F7 distance and delta)
+-> long strikes 1..4 steps (risk budget) -> F9 liquidity -> natural-price credit after
+round-trip costs (F8) -> EV. Every stock-level rejection and every enumerated spread is saved
+to `candidates` with its inputs. Accepted spreads are ranked by EV / max loss.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import math
+from collections import OrderedDict
+from dataclasses import asdict, dataclass, field
+from datetime import date, datetime, timedelta
+from typing import Dict, List, Optional, Tuple
+
+from sqlalchemy import insert, select
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+
+from .. import market
+from ..analytics import vol
+from ..analytics.vol import delta_iv
+from ..data import events as ev_data
+from ..data import instruments as inst
+from ..data import refdata
+from ..data.calendar import TradingCalendar
+from ..data.daily import load_daily
+from ..data.levels_store import StoredLevel, load_levels
+from ..data.models import Candidate, IVSnapshot
+from ..risk.sizing import risk_budget
+from . import ev as evmod
+from .costs import round_trip_costs
+from .spreads import BEAR_CALL, BULL_PUT, option_type, spread_metrics
+
+log = logging.getLogger(__name__)
+
+# Funnel stages in evaluation order (stock level). Each stock is counted at its first failure.
+STAGES = ["F1 universe", "DTE window", "data", "F2 events", "F3 IV/HV", "F4 IV percentile",
+          "F5 cause passed", "direction", "F6 level buffer", "F7 distance/delta", "risk budget",
+          "F9 liquidity", "F8 credit/width", "EV", "accepted"]
+SCAN_BAND = 0.30           # quote strikes within 30% of the futures price (performance, not a rule)
+
+
+@dataclass
+class SpreadCandidate:
+    symbol: str
+    side: str
+    short_k: float
+    long_k: float
+    expiry: date
+    dte: int
+    lot_size: int
+    credit_nat: float = 0.0          # per share, after round-trip costs
+    credit_gross: float = 0.0
+    width: float = 0.0
+    max_loss: float = 0.0            # rupees per lot
+    breakeven: float = 0.0
+    p_market: Optional[float] = None
+    p_model: Optional[float] = None
+    ev: Optional[float] = None
+    ev_ratio: Optional[float] = None
+    flags: Dict[str, Optional[bool]] = field(default_factory=dict)   # "f1".."f9"
+    reject_reason: Optional[str] = None
+    inputs: Dict = field(default_factory=dict)
+    short_sym: str = ""
+    long_sym: str = ""
+
+    @property
+    def accepted(self) -> bool:
+        return self.reject_reason is None
+
+
+@dataclass
+class StockOutcome:
+    symbol: str
+    stage: str                       # first failing stage, or "accepted"
+    reason: str
+    best: Optional[SpreadCandidate] = None
+    rows: List[SpreadCandidate] = field(default_factory=list)
+
+
+@dataclass
+class ScanResult:
+    scan_id: str
+    ts: datetime
+    outcomes: List[StockOutcome]
+    ranked: List[SpreadCandidate]
+    selected: List[SpreadCandidate]
+
+    @property
+    def funnel(self) -> "OrderedDict[str, int]":
+        counts = OrderedDict((s, 0) for s in STAGES)
+        for o in self.outcomes:
+            counts[o.stage] += 1
+        return counts
+
+
+# ------------------------------------------------------------------------------- helpers
+
+def _flags_upto(n: int, last_ok: bool = True) -> Dict[str, Optional[bool]]:
+    """f1..f(n-1) True, f(n) = last_ok, rest None."""
+    out: Dict[str, Optional[bool]] = {f"f{i}": None for i in range(1, 10)}
+    for i in range(1, n):
+        out[f"f{i}"] = True
+    out[f"f{n}"] = last_ok
+    return out
+
+
+def _q(qt) -> Optional[dict]:
+    if qt is None:
+        return None
+    return {"bid": qt.bid, "ask": qt.ask, "bid_qty": qt.bids[0].quantity if qt.bids else 0,
+            "ask_qty": qt.asks[0].quantity if qt.asks else 0, "oi": qt.oi, "volume": qt.volume, "last": qt.last}
+
+
+def liquidity_ok(ctx, qt, lot: int) -> Tuple[bool, str]:
+    lc = ctx.cfg.liquidity
+    if qt is None or qt.bid <= 0 or qt.ask <= 0:
+        return False, "no two-sided quote"
+    sp = qt.spread_pct
+    if sp is None or sp > lc.max_spread_pct:
+        return False, f"bid-ask {sp * 100 if sp else 0:.1f}% of mid"
+    if qt.oi / lot < lc.min_oi_lots:
+        return False, f"OI {qt.oi // lot} lots"
+    if qt.volume / lot < lc.min_vol_lots:
+        return False, f"volume {qt.volume // lot} lots"
+    return True, ""
+
+
+def iv_history(ctx, symbol: str, before: date, n: int) -> List[IVSnapshot]:
+    with ctx.engine.connect() as conn:
+        rows = conn.execute(select(IVSnapshot.date, IVSnapshot.atm_iv, IVSnapshot.ivp_252, IVSnapshot.method)
+                            .where(IVSnapshot.symbol == symbol, IVSnapshot.date < before)
+                            .order_by(IVSnapshot.date.desc()).limit(n)).all()
+    return list(reversed(rows))
+
+
+def iv_percentile(ctx, symbol: str, today: date, atm_iv: float, hv20_hist: List[float]) -> Tuple[Optional[float], str, Optional[float]]:
+    """(percentile, method, proxy_threshold). True IV percentile once enough snapshots exist,
+    else the rank of IV within the stock's rolling HV20 history (proxy)."""
+    ic = ctx.cfg.iv
+    hist = iv_history(ctx, symbol, today, ic.ivp_history_days)
+    if len(hist) >= ic.ivp_min_history:
+        return vol.percentile_rank([h.atm_iv for h in hist], atm_iv), "true", None
+    hv_hist = hv20_hist[-ic.ivp_history_days:]
+    return vol.percentile_rank(hv_hist, atm_iv), "proxy", vol.percentile_value(hv_hist, ic.proxy_hv_pctile)
+
+
+def f4_pass(ctx, ivp: Optional[float], method: str) -> bool:
+    ic = ctx.cfg.iv
+    if ivp is None:
+        return False
+    return ivp >= (ic.min_ivp if method == "true" else ic.proxy_hv_pctile)
+
+
+def f5_check(ctx, symbol: str, today: date, daily, cal: TradingCalendar) -> Tuple[bool, str, Dict]:
+    """IV was below its F4 threshold within the lookback and a cause (price move >= k x ATR, or a
+    results/news date) happened on or after that low-IV day and before today."""
+    ic = ctx.cfg.iv
+    hist = iv_history(ctx, symbol, today, ic.spike_lookback)
+    window_days = set(cal.last_n(cal.prev_trading_day(today), ic.spike_lookback))
+    hist = [h for h in hist if h.date in window_days]
+    if not hist:
+        return False, "no IV snapshots in look-back (history still building)", {}
+    lows = [h.date for h in hist
+            if h.ivp_252 is not None and h.ivp_252 < (ic.min_ivp if h.method == "true" else ic.proxy_hv_pctile)]
+    if not lows:
+        return False, f"IV not below threshold in last {ic.spike_lookback} sessions", {}
+    first_low = min(lows)
+    causes = []
+    d = daily[daily.index >= first_low]
+    prev_close = daily["close"].shift(1)
+    prev_atr = daily["atr14"].shift(1)
+    for dt_, row in d.iterrows():
+        pc, pa = prev_close.get(dt_), prev_atr.get(dt_)
+        if pc and pa and not math.isnan(pa) and abs(row["close"] - pc) >= ic.spike_move_atr * pa:
+            causes.append(f"{dt_} move {abs(row['close'] - pc) / pa:.1f}xATR")
+    for e in ev_data.events_between(ctx.engine, symbol, first_low, today - timedelta(days=1)):
+        causes.append(f"{e.event_date} {e.event_type}")
+    info = {"low_iv_days": [str(x) for x in lows], "causes": causes}
+    if not causes:
+        return False, "IV rose without a qualifying price move or event", info
+    return True, "", info
+
+
+def choose_direction(levels: List[StoredLevel], spot: float, atr: float, max_dist_atr: float):
+    """Bull put if spot is within max_dist_atr x ATR above a support; bear call if within that
+    distance below a resistance; if both, the higher-scored level wins. Returns (side, level)."""
+    lim = max_dist_atr * atr
+    sup = [lv for lv in levels if 0 <= spot - lv.price <= lim]
+    res = [lv for lv in levels if 0 <= lv.price - spot <= lim]
+    best_sup = max(sup, key=lambda lv: lv.price) if sup else None      # nearest support
+    best_res = min(res, key=lambda lv: lv.price) if res else None      # nearest resistance
+    if best_sup and best_res:
+        return (BULL_PUT, best_sup) if best_sup.score >= best_res.score else (BEAR_CALL, best_res)
+    if best_sup:
+        return BULL_PUT, best_sup
+    if best_res:
+        return BEAR_CALL, best_res
+    return None, None
+
+
+# ------------------------------------------------------------------------------- per stock
+
+def evaluate_stock(ctx, symbol: str, today: date, cal: TradingCalendar, budget: float,
+                   snapshots: List[dict]) -> StockOutcome:
+    cfg = ctx.cfg
+    exps = inst.expiries(ctx.engine, today, symbol)
+    trade_exp = market.pick_expiry(exps, today, cfg.dte_min, cfg.dte_max)
+    atm_exp = market.pick_expiry(exps, today, cfg.iv.atm_min_dte)
+    base = SpreadCandidate(symbol, "", 0, 0, trade_exp, market.dte(trade_exp, today) if trade_exp else None, 0,
+                           flags=_flags_upto(1, True))
+
+    def reject(stage: str, reason: str, flag_n: Optional[int] = None, **inputs) -> StockOutcome:
+        c = SpreadCandidate(**{**asdict(base), "flags": dict(base.flags), "inputs": {**base.inputs, **inputs}})
+        if flag_n:
+            c.flags = {**c.flags, f"f{flag_n}": False}
+        c.reject_reason = f"{stage}: {reason}"
+        return StockOutcome(symbol, stage, reason, rows=[c])
+
+    if atm_exp is None:
+        return reject("data", "no expiry for ATM IV")
+    daily = load_daily(ctx.engine, symbol, end=cal.prev_trading_day(today))
+    if len(daily) < cfg.analytics.hv_window + 2 or daily["atr14"].dropna().empty:
+        return reject("data", f"only {len(daily)} daily bars stored")
+    atr = float(daily["atr14"].dropna().iloc[-1])
+    hv20 = float(daily["hv20"].dropna().iloc[-1]) if daily["hv20"].notna().any() else None
+    if not hv20:
+        return reject("data", "HV20 unavailable")
+
+    # IV snapshot for every universe stock, whatever happens next.
+    atm_snap = market.snapshot_chain(ctx, symbol, atm_exp, band=SCAN_BAND)
+    atm_iv = atm_snap.atm_iv
+    if atm_iv is None:
+        return reject("data", "could not compute ATM IV")
+    ivp, method, proxy_thr = iv_percentile(ctx, symbol, today, atm_iv, list(daily["hv20"].dropna()))
+    snapshots.append(dict(ts=ctx.clock.now(), date=today, symbol=symbol, expiry=atm_exp,
+                          fut_price=atm_snap.fut_price, atm_iv=atm_iv,
+                          iv_25d_put=delta_iv(atm_snap.ivs, 0.25, "PE"),
+                          iv_25d_call=delta_iv(atm_snap.ivs, 0.25, "CE"), ivp_252=ivp, method=method))
+    base.inputs.update(spot=atm_snap.spot, fut_atm=atm_snap.fut_price, atr14=atr, hv20=hv20, atm_iv=atm_iv,
+                       atm_expiry=str(atm_exp), ivp=ivp, ivp_method=method, proxy_threshold=proxy_thr)
+
+    if trade_exp is None:
+        return reject("DTE window", f"no expiry {cfg.dte_min}-{cfg.dte_max} days out")
+    f2 = ev_data.check_f2(ctx, symbol, trade_exp)
+    if not f2.passed:
+        return reject("F2 events", f2.reason, 2, events=f2.events)
+    base.flags["f2"] = True
+    ratio = atm_iv / hv20
+    base.inputs["iv_hv"] = ratio
+    if ratio < cfg.iv.min_iv_hv_ratio:
+        return reject("F3 IV/HV", f"IV/HV {ratio:.2f} < {cfg.iv.min_iv_hv_ratio}", 3)
+    base.flags["f3"] = True
+    if not f4_pass(ctx, ivp, method):
+        thr = cfg.iv.min_ivp if method == "true" else cfg.iv.proxy_hv_pctile
+        return reject("F4 IV percentile", f"{method} IVP {ivp or 0:.0f} < {thr:g}", 4)
+    base.flags["f4"] = True
+    ok5, why5, info5 = f5_check(ctx, symbol, today, daily, cal)
+    base.inputs.update(f5=info5)
+    if not ok5:
+        return reject("F5 cause passed", why5, 5)
+    base.flags["f5"] = True
+
+    snap = atm_snap if trade_exp == atm_exp else market.snapshot_chain(ctx, symbol, trade_exp, band=SCAN_BAND)
+    spot, F = snap.spot, snap.fut_price
+    levels = load_levels(ctx.engine, symbol, today)
+    side, level = choose_direction(levels, spot, atr, cfg.direction.max_dist_atr)
+    if side is None:
+        return reject("direction", f"no scored level within {cfg.direction.max_dist_atr} x ATR of spot")
+    base.side = side
+    base.inputs.update(level=level.price, level_score=level.score, level_source=level.source,
+                       fut=F, T=snap.T)
+    cp = option_type(side)
+    chain = snap.chain
+    step = chain.strike_step
+    lot = chain.lot_size
+    base.lot_size = lot
+    buf = cfg.levels.min_buffer_atr * atr
+    rows: List[SpreadCandidate] = []
+    any_f6 = any_f7 = any_budget = any_liq = any_f8 = False
+    strikes = [k for k in chain.strikes if (k < spot if side == BULL_PUT else k > spot)]
+    for k in strikes:
+        f6 = (k <= level.price - buf) if side == BULL_PUT else (k >= level.price + buf)
+        if not f6:
+            continue
+        any_f6 = True
+        oiv = snap.iv(k, cp)
+        delta = abs(oiv.delta) if oiv and oiv.delta is not None else None
+        dist_ok = abs(k - spot) >= cfg.strikes.min_dist_atr * atr
+        delta_ok = delta is not None and cfg.strikes.delta_min <= delta <= cfg.strikes.delta_max
+        if not (dist_ok and delta_ok):
+            continue
+        any_f7 = True
+        for w in cfg.spread.widths_steps:
+            long_k = round(k - w * step, 2) if side == BULL_PUT else round(k + w * step, 2)
+            short_leg, long_leg = chain.leg(k, cp), chain.leg(long_k, cp)
+            c = SpreadCandidate(symbol, side, k, long_k, trade_exp, market.dte(trade_exp, today), lot,
+                                flags={**base.flags, "f6": True, "f7": True},
+                                inputs={**base.inputs, "short_delta": delta, "short_iv": oiv.iv, "width_steps": w})
+            rows.append(c)
+            if long_leg is None:
+                c.reject_reason = "long strike not listed"
+                continue
+            c.short_sym, c.long_sym = short_leg.tradingsymbol, long_leg.tradingsymbol
+            qs, ql = snap.quotes.get(short_leg.key), snap.quotes.get(long_leg.key)
+            c.inputs.update(short_quote=_q(qs), long_quote=_q(ql))
+            width = abs(k - long_k)
+            # Budget pre-check on gross credit (exact max loss is checked after costs below).
+            if qs is None or ql is None or (width - (qs.bid - ql.ask)) * lot > budget:
+                c.reject_reason = "risk budget: max loss per lot above per-trade budget"
+                continue
+            any_budget = True
+            ok_s, why_s = liquidity_ok(ctx, qs, lot)
+            ok_l, why_l = liquidity_ok(ctx, ql, lot)
+            if not (ok_s and ok_l):
+                c.flags["f9"] = False
+                c.reject_reason = f"F9 liquidity: {'short ' + why_s if not ok_s else 'long ' + why_l}"
+                continue
+            c.flags["f9"] = True
+            any_liq = True
+            gross = qs.bid - ql.ask
+            c.credit_gross = gross
+            if gross <= 0:
+                c.flags["f8"] = False
+                c.reject_reason = "F8 credit/width: no credit at natural prices"
+                continue
+            costs = round_trip_costs(cfg.costs, qs.bid, ql.ask, lot)
+            m = spread_metrics(side, k, long_k, qs.bid, ql.ask, lot, costs_per_share=costs / lot)
+            c.credit_nat, c.width, c.max_loss, c.breakeven = m.credit, m.width, m.max_loss, m.breakeven
+            c.inputs.update(round_trip_costs=costs, breakeven_win_rate=m.breakeven_win_rate)
+            if m.max_loss > budget:
+                c.reject_reason = "risk budget: max loss per lot above per-trade budget"
+                continue
+            if m.credit < cfg.spread.min_credit_width * m.width:
+                c.flags["f8"] = False
+                c.reject_reason = f"F8 credit/width: {m.credit / m.width:.0%} < {cfg.spread.min_credit_width:.0%}"
+                continue
+            c.flags["f8"] = True
+            any_f8 = True
+            r = evmod.evaluate(side, F, m.breakeven, snap.T, oiv.iv, hv20, m.credit, m.width, lot,
+                               cfg.ev.hv_weight, cfg.exit.stop_mult)
+            c.p_market, c.p_model, c.ev, c.ev_ratio = r.p_market, r.p_model, r.ev, r.ev_ratio
+            c.inputs.update(sigma_model=r.sigma_model, avg_loss=r.avg_loss)
+            if not (r.ev > 0 and r.ev_ratio >= cfg.ev.min_ev_ratio):
+                c.reject_reason = f"EV: {r.ev_ratio:.1%} of max loss < {cfg.ev.min_ev_ratio:.1%}"
+    accepted = [c for c in rows if c.accepted]
+    if accepted:
+        best = max(accepted, key=lambda c: c.ev_ratio)
+        return StockOutcome(symbol, "accepted", "", best, rows)
+    if not any_f6:
+        out = reject("F6 level buffer", f"no strike {cfg.levels.min_buffer_atr} x ATR beyond level {level.price}", 6)
+    elif not any_f7:
+        out = reject("F7 distance/delta", "no short strike with delta in band and >= ATR from spot", 7)
+    elif not any_budget:
+        out = StockOutcome(symbol, "risk budget", "every width exceeds the per-trade risk budget", rows=rows)
+    elif not any_liq:
+        out = StockOutcome(symbol, "F9 liquidity", "no spread with both legs liquid", rows=rows)
+    elif not any_f8:
+        out = StockOutcome(symbol, "F8 credit/width", "no spread with enough credit", rows=rows)
+    else:
+        out = StockOutcome(symbol, "EV", "no spread with positive EV above the minimum", rows=rows)
+    if out.stage in ("F6 level buffer", "F7 distance/delta"):
+        out.rows = out.rows + rows
+    return out
+
+
+# ------------------------------------------------------------------------------- scan
+
+def run_scan(ctx, persist: bool = True) -> ScanResult:
+    cfg = ctx.cfg
+    now = ctx.clock.now()
+    today = market.ensure_instruments(ctx)
+    cal = TradingCalendar.load(ctx.engine)
+    scan_id = now.strftime("%Y%m%d-%H%M%S")
+    stocks = inst.fno_stocks(ctx.engine, today)
+    universe = refdata.universe(ctx.engine, stocks, cal.prev_trading_day(today), cfg.universe.top_n,
+                                cfg.universe.turnover_window, cal)
+    budget = risk_budget(ctx)
+    outcomes: List[StockOutcome] = []
+    snapshots: List[dict] = []
+    in_universe = set(universe)
+    for sym in stocks:
+        if sym not in in_universe:
+            c = SpreadCandidate(sym, "", 0, 0, None, None, 0, flags=_flags_upto(1, False))
+            reason = "no option turnover data" if not universe else f"not in top {cfg.universe.top_n} by option turnover"
+            c.reject_reason = f"F1 universe: {reason}"
+            outcomes.append(StockOutcome(sym, "F1 universe", reason, rows=[c]))
+            continue
+        try:
+            outcomes.append(evaluate_stock(ctx, sym, today, cal, budget, snapshots))
+        except Exception as exc:          # one bad stock must not stop the scan
+            log.exception("scan failed for %s", sym)
+            c = SpreadCandidate(sym, "", 0, 0, None, None, 0, flags=_flags_upto(1, True))
+            c.reject_reason = f"data: error {exc}"
+            outcomes.append(StockOutcome(sym, "data", f"error: {exc}", rows=[c]))
+    ranked = sorted([o.best for o in outcomes if o.best], key=lambda c: c.ev_ratio, reverse=True)
+    selected = ranked[: cfg.scan.top_n]
+    result = ScanResult(scan_id, now, outcomes, ranked, selected)
+    if persist:
+        _persist(ctx, result, snapshots)
+    log.info("scan %s: %d stocks, %d universe, %d accepted", scan_id, len(stocks), len(universe), len(ranked))
+    return result
+
+
+def _persist(ctx, result: ScanResult, snapshots: List[dict]) -> None:
+    rows = []
+    best_ids = {id(c) for c in result.ranked}
+    for o in result.outcomes:
+        for c in o.rows:
+            rows.append(dict(
+                ts=result.ts, scan_id=result.scan_id, symbol=c.symbol, side=c.side or None,
+                short_k=c.short_k or None, long_k=c.long_k or None, expiry=c.expiry, dte=c.dte,
+                lot_size=c.lot_size or None, credit_nat=c.credit_nat or None, width=c.width or None,
+                max_loss=c.max_loss or None, p_market=c.p_market, p_model=c.p_model, ev=c.ev,
+                ev_ratio=c.ev_ratio if c.ev_ratio is None or math.isfinite(c.ev_ratio) else None,
+                **{f"{k}_pass": v for k, v in c.flags.items()},
+                accepted=id(c) in best_ids, reject_reason=c.reject_reason,
+                inputs_json=json.dumps({**c.inputs, "short_sym": c.short_sym, "long_sym": c.long_sym,
+                                        "best_of_stock": id(c) in best_ids}, default=str)))
+    with ctx.engine.begin() as conn:
+        if rows:
+            conn.execute(insert(Candidate), rows)
+        for s in snapshots:
+            stmt = sqlite_insert(IVSnapshot).values(**s)
+            conn.execute(stmt.on_conflict_do_update(index_elements=["date", "symbol"], set_={
+                k: getattr(stmt.excluded, k) for k in s if k not in ("date", "symbol")}))

@@ -59,3 +59,47 @@ def option_chain_report(ctx, symbol: str, expiry: Optional[date] = None, rows: i
             f"strike step {ch.strike_step:g}  tick {ch.tick_size}  ATM IV {_iv(snap.atm_iv)}%\n")
     headers = ["CE OI(lots)", "bid", "ask", "IV%", "delta", "strike", "delta", "IV%", "bid", "ask", "PE OI(lots)"]
     return head + "\n" + table(headers, out_rows, align="rrrrrrrrrrr")
+
+
+def scan_report(ctx, result, show_rejections: int = 0) -> str:
+    from .fmt import inr
+
+    lines = [f"Scan {result.scan_id}  at {result.ts:%Y-%m-%d %H:%M} IST"
+             f"{'  [SYNTHETIC MARKET]' if ctx.is_mock else ''}", ""]
+    if result.ranked:
+        rows = []
+        selected = {id(c) for c in result.selected}
+        for i, c in enumerate(result.ranked, 1):
+            be_wr = c.inputs.get("breakeven_win_rate")
+            rows.append([
+                f"{i}{'*' if id(c) in selected else ''}", c.symbol, c.side.replace("_", " "),
+                f"{c.short_k:g}/{c.long_k:g}", str(c.expiry), c.dte, f"{c.credit_nat:.2f}", f"{c.width:g}",
+                f"{c.credit_nat / c.width:.0%}", inr(c.max_loss), f"{c.breakeven:.1f}",
+                f"{be_wr:.0%}" if be_wr else "-", f"{c.p_market:.0%}", f"{c.p_model:.0%}", inr(c.ev),
+                f"{c.ev_ratio:.1%}", c.inputs.get("ivp_method", ""),
+            ])
+        lines.append(table(["#", "symbol", "side", "short/long", "expiry", "DTE", "credit", "width", "cr/w",
+                            "max loss/lot", "BE", "BE win%", "p_mkt", "p_model", "EV/lot", "EV/ML", "IVP"],
+                           rows, align="llllrrrrrrrrrrrrl"))
+        lines.append(f"\n* = top {ctx.cfg.scan.top_n} sent to sizing and portfolio checks. Prices per share, "
+                     "credit after round-trip costs.")
+    else:
+        lines.append("No candidates passed every filter today.")
+    lines += ["", "Rejection funnel (stocks removed at each stage)", ""]
+    total = len(result.outcomes)
+    remaining = total
+    frows = []
+    for stage, n in result.funnel.items():
+        if stage == "accepted":
+            continue
+        frows.append([stage, n, remaining - n])
+        remaining -= n
+    frows.append(["accepted", "", result.funnel["accepted"]])
+    lines.append(f"{total} F&O stocks scanned")
+    lines.append(table(["stage", "removed", "remaining"], frows))
+    if show_rejections:
+        lines += ["", "Rejections"]
+        for o in result.outcomes:
+            if o.stage != "accepted" and o.stage != "F1 universe":
+                lines.append(f"  {o.symbol:<12} {o.stage:<18} {o.reason}")
+    return "\n".join(lines)

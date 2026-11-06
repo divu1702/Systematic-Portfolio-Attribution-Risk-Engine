@@ -4,6 +4,6 @@ PyYAML>=6.0
 SQLAlchemy>=2.0
 kiteconnect>=5.0        # Kite Connect app (paid plan) for market data; installs `requests`
 pandas>=2.0
-numpy>=1.26
+numpy>=2.0
 scipy>=1.11             # Brent's method IV solver
 pytest>=7.4

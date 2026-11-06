@@ -84,6 +84,40 @@ def _cmd_chain(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_scan(args: argparse.Namespace) -> int:
+    from .jobs import morning_refresh, scan_job
+    from .views import scan_report
+
+    if args.mock and args.warmup:
+        from datetime import datetime, time as dtime
+        from .clock import SystemClock, parse_hhmm
+        from .sim import make_sim_context, sim_days, warmup
+
+        cfg = load_config(args.config)
+        setup_logging(cfg.log_dir, level="WARNING")
+        from .broker.synthetic import SyntheticMarket
+
+        today = SystemClock().today()
+        market_ = SyntheticMarket(seed=cfg.broker.mock_seed, n_symbols=cfg.broker.mock_symbols, anchor=today,
+                                  r=cfg.analytics.risk_free)
+        last = max(d for d in market_.days if d <= today)
+        days = sim_days(market_, last, args.warmup + 1)
+        ctx = make_sim_context(cfg, days[0], market=market_)
+        print(f"Warming up the synthetic market for {args.warmup} trading days "
+              f"({days[0]} to {days[-2]}) so IV history exists ...", flush=True)
+        warmup(ctx, days[:-1], progress=lambda i, n: print(f"  day {i}/{n}", end="\r", flush=True))
+        print()
+        ctx.clock.set(datetime.combine(days[-1], dtime(8, 45)))
+        morning_refresh(ctx)
+        ctx.clock.set(datetime.combine(days[-1], parse_hhmm(cfg.schedule.scan)))
+    else:
+        ctx = _ctx(args)
+        morning_refresh(ctx)
+    result = scan_job(ctx)
+    print(scan_report(ctx, result, show_rejections=args.why))
+    return 0
+
+
 def _cmd_record(args: argparse.Namespace) -> int:
     from .recorder import record_fixtures
 
@@ -114,6 +148,13 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--rows", type=int, default=10, help="strikes either side of the money")
     sp.add_argument("--mock", action="store_true", help="use the synthetic market")
     sp.set_defaults(func=_cmd_chain)
+
+    sp = sub.add_parser("scan", help="run the entry scan: ranked candidates and rejection funnel")
+    sp.add_argument("--mock", action="store_true", help="use the synthetic market")
+    sp.add_argument("--warmup", type=int, default=0,
+                    help="with --mock: simulate N prior trading days first (fresh mock database)")
+    sp.add_argument("--why", type=int, nargs="?", const=1, default=0, help="list each stock's rejection reason")
+    sp.set_defaults(func=_cmd_scan)
 
     sp = sub.add_parser("record", help="save real Kite responses as offline test fixtures")
     sp.add_argument("symbols", nargs="+")
