@@ -3,8 +3,8 @@
 For each F&O stock: F1 universe -> DTE window -> IV snapshot (stored for every universe stock)
 -> F2 events -> F3 IV/HV -> F4 IV percentile (true or HV-percentile proxy) -> F5 cause passed
 -> direction from levels -> enumerate short strikes (F6 level buffer, F7 distance and delta)
--> long strikes 1..4 steps (risk budget) -> F9 liquidity -> natural-price credit after
-round-trip costs (F8) -> EV. Every stock-level rejection and every enumerated spread is saved
+-> long strikes 1..4 steps -> F9 liquidity -> natural-price credit after round-trip costs (F8)
+-> sizing within the risk budget -> F9 order-book depth for that size -> EV. Every stock-level rejection and every enumerated spread is saved
 to `candidates` with its inputs. Accepted spreads are ranked by EV / max loss.
 """
 
@@ -31,7 +31,7 @@ from ..data.calendar import TradingCalendar
 from ..data.daily import load_daily
 from ..data.levels_store import StoredLevel, load_levels
 from ..data.models import Candidate, IVSnapshot
-from ..risk.sizing import risk_budget
+from ..risk.sizing import current_equity, plan_lots, risk_per_lot
 from . import ev as evmod
 from .costs import round_trip_costs
 from .spreads import BEAR_CALL, BULL_PUT, option_type, spread_metrics
@@ -40,8 +40,8 @@ log = logging.getLogger(__name__)
 
 # Funnel stages in evaluation order (stock level). Each stock is counted at its first failure.
 STAGES = ["F1 universe", "DTE window", "data", "F2 events", "F3 IV/HV", "F4 IV percentile",
-          "F5 cause passed", "direction", "F6 level buffer", "F7 distance/delta", "risk budget",
-          "F9 liquidity", "F8 credit/width", "EV", "accepted"]
+          "F5 cause passed", "direction", "F6 level buffer", "F7 distance/delta", "F9 liquidity",
+          "F8 credit/width", "risk budget", "EV", "accepted"]
 SCAN_BAND = 0.30           # quote strikes within 30% of the futures price (performance, not a rule)
 
 
@@ -58,6 +58,7 @@ class SpreadCandidate:
     credit_gross: float = 0.0
     width: float = 0.0
     max_loss: float = 0.0            # rupees per lot
+    risk_per_lot: float = 0.0        # rupees per lot on the sizing basis (loss at the stop by default)
     breakeven: float = 0.0
     p_market: Optional[float] = None
     p_model: Optional[float] = None
@@ -119,16 +120,29 @@ def _q(qt) -> Optional[dict]:
 
 
 def liquidity_ok(ctx, qt, lot: int) -> Tuple[bool, str]:
+    """Per leg: a two-sided quote, a tight enough bid-ask, and (only if configured above zero)
+    minimum OI and volume."""
     lc = ctx.cfg.liquidity
     if qt is None or qt.bid <= 0 or qt.ask <= 0:
         return False, "no two-sided quote"
     sp = qt.spread_pct
     if sp is None or sp > lc.max_spread_pct:
         return False, f"bid-ask {sp * 100 if sp else 0:.1f}% of mid"
-    if qt.oi / lot < lc.min_oi_lots:
+    if lc.min_oi_lots and qt.oi / lot < lc.min_oi_lots:
         return False, f"OI {qt.oi // lot} lots"
-    if qt.volume / lot < lc.min_vol_lots:
+    if lc.min_vol_lots and qt.volume / lot < lc.min_vol_lots:
         return False, f"volume {qt.volume // lot} lots"
+    return True, ""
+
+
+def depth_ok(ctx, qs, ql, qty: int) -> Tuple[bool, str]:
+    """Absolute liquidity: the 5-level book must hold at least `min_depth_cover` x the order
+    size on both bid and ask of both legs (enough to get in and to get out)."""
+    need = qty * ctx.cfg.liquidity.min_depth_cover
+    for name, q in (("short", qs), ("long", ql)):
+        bids, asks = sum(lv.quantity for lv in q.bids[:5]), sum(lv.quantity for lv in q.asks[:5])
+        if bids < need or asks < need:
+            return False, f"{name} leg depth {bids}/{asks} (bid/ask qty) < {need:g} needed"
     return True, ""
 
 
@@ -207,7 +221,7 @@ def choose_direction(levels: List[StoredLevel], spot: float, atr: float, max_dis
 
 # ------------------------------------------------------------------------------- per stock
 
-def evaluate_stock(ctx, symbol: str, today: date, cal: TradingCalendar, budget: float,
+def evaluate_stock(ctx, symbol: str, today: date, cal: TradingCalendar, equity: float,
                    snapshots: List[dict]) -> StockOutcome:
     cfg = ctx.cfg
     exps = inst.expiries(ctx.engine, today, symbol)
@@ -283,7 +297,7 @@ def evaluate_stock(ctx, symbol: str, today: date, cal: TradingCalendar, budget: 
     base.lot_size = lot
     buf = cfg.levels.min_buffer_atr * atr
     rows: List[SpreadCandidate] = []
-    any_f6 = any_f7 = any_budget = any_liq = any_f8 = False
+    any_f6 = any_f7 = any_liq = any_f8 = any_budget = any_depth = False
     strikes = [k for k in chain.strikes if (k < spot if side == BULL_PUT else k > spot)]
     for k in strikes:
         f6 = (k <= level.price - buf) if side == BULL_PUT else (k >= level.price + buf)
@@ -310,19 +324,12 @@ def evaluate_stock(ctx, symbol: str, today: date, cal: TradingCalendar, budget: 
             c.short_sym, c.long_sym = short_leg.tradingsymbol, long_leg.tradingsymbol
             qs, ql = snap.quotes.get(short_leg.key), snap.quotes.get(long_leg.key)
             c.inputs.update(short_quote=_q(qs), long_quote=_q(ql))
-            width = abs(k - long_k)
-            # Budget pre-check on gross credit (exact max loss is checked after costs below).
-            if qs is None or ql is None or (width - (qs.bid - ql.ask)) * lot > budget:
-                c.reject_reason = "risk budget: max loss per lot above per-trade budget"
-                continue
-            any_budget = True
             ok_s, why_s = liquidity_ok(ctx, qs, lot)
             ok_l, why_l = liquidity_ok(ctx, ql, lot)
             if not (ok_s and ok_l):
                 c.flags["f9"] = False
                 c.reject_reason = f"F9 liquidity: {'short ' + why_s if not ok_s else 'long ' + why_l}"
                 continue
-            c.flags["f9"] = True
             any_liq = True
             gross = qs.bid - ql.ask
             c.credit_gross = gross
@@ -334,15 +341,26 @@ def evaluate_stock(ctx, symbol: str, today: date, cal: TradingCalendar, budget: 
             m = spread_metrics(side, k, long_k, qs.bid, ql.ask, lot, costs_per_share=costs / lot)
             c.credit_nat, c.width, c.max_loss, c.breakeven = m.credit, m.width, m.max_loss, m.breakeven
             c.inputs.update(round_trip_costs=costs, breakeven_win_rate=m.breakeven_win_rate)
-            if m.max_loss > budget:
-                c.reject_reason = "risk budget: max loss per lot above per-trade budget"
-                continue
             if m.credit < cfg.spread.min_credit_width * m.width:
                 c.flags["f8"] = False
                 c.reject_reason = f"F8 credit/width: {m.credit / m.width:.0%} < {cfg.spread.min_credit_width:.0%}"
                 continue
             c.flags["f8"] = True
             any_f8 = True
+            c.risk_per_lot = risk_per_lot(cfg, m.credit, m.width, lot)
+            lots, why_lots = plan_lots(cfg, equity, c.risk_per_lot, m.max_loss)
+            c.inputs.update(risk_per_lot=c.risk_per_lot, planned_lots=lots, sizing_basis=cfg.risk.sizing_basis)
+            if lots == 0:
+                c.reject_reason = f"risk budget: {why_lots}"
+                continue
+            any_budget = True
+            ok_d, why_d = depth_ok(ctx, qs, ql, lots * lot)
+            if not ok_d:
+                c.flags["f9"] = False
+                c.reject_reason = f"F9 liquidity: {why_d}"
+                continue
+            c.flags["f9"] = True
+            any_depth = True
             r = evmod.evaluate(side, F, m.breakeven, snap.T, oiv.iv, hv20, m.credit, m.width, lot,
                                cfg.ev.hv_weight, cfg.exit.stop_mult)
             c.p_market, c.p_model, c.ev, c.ev_ratio = r.p_market, r.p_model, r.ev, r.ev_ratio
@@ -357,12 +375,14 @@ def evaluate_stock(ctx, symbol: str, today: date, cal: TradingCalendar, budget: 
         out = reject("F6 level buffer", f"no strike {cfg.levels.min_buffer_atr} x ATR beyond level {level.price}", 6)
     elif not any_f7:
         out = reject("F7 distance/delta", "no short strike with delta in band and >= ATR from spot", 7)
-    elif not any_budget:
-        out = StockOutcome(symbol, "risk budget", "every width exceeds the per-trade risk budget", rows=rows)
     elif not any_liq:
         out = StockOutcome(symbol, "F9 liquidity", "no spread with both legs liquid", rows=rows)
     elif not any_f8:
         out = StockOutcome(symbol, "F8 credit/width", "no spread with enough credit", rows=rows)
+    elif not any_budget:
+        out = StockOutcome(symbol, "risk budget", "no width fits the per-trade risk budget", rows=rows)
+    elif not any_depth:
+        out = StockOutcome(symbol, "F9 liquidity", "order book too thin for the planned size", rows=rows)
     else:
         out = StockOutcome(symbol, "EV", "no spread with positive EV above the minimum", rows=rows)
     if out.stage in ("F6 level buffer", "F7 distance/delta"):
@@ -380,20 +400,25 @@ def run_scan(ctx, persist: bool = True) -> ScanResult:
     scan_id = now.strftime("%Y%m%d-%H%M%S")
     stocks = inst.fno_stocks(ctx.engine, today)
     universe = refdata.universe(ctx.engine, stocks, cal.prev_trading_day(today), cfg.universe.top_n,
-                                cfg.universe.turnover_window, cal)
-    budget = risk_budget(ctx)
+                                cfg.universe.turnover_window, cal, cfg.universe.min_avg_turnover)
+    equity = current_equity(ctx)
     outcomes: List[StockOutcome] = []
     snapshots: List[dict] = []
     in_universe = set(universe)
     for sym in stocks:
         if sym not in in_universe:
             c = SpreadCandidate(sym, "", 0, 0, None, None, 0, flags=_flags_upto(1, False))
-            reason = "no option turnover data" if not universe else f"not in top {cfg.universe.top_n} by option turnover"
+            if not universe:
+                reason = "no option turnover data"
+            elif cfg.universe.top_n:
+                reason = f"not in top {cfg.universe.top_n} by option turnover"
+            else:
+                reason = f"average option turnover below {cfg.universe.min_avg_turnover:,.0f}"
             c.reject_reason = f"F1 universe: {reason}"
             outcomes.append(StockOutcome(sym, "F1 universe", reason, rows=[c]))
             continue
         try:
-            outcomes.append(evaluate_stock(ctx, sym, today, cal, budget, snapshots))
+            outcomes.append(evaluate_stock(ctx, sym, today, cal, equity, snapshots))
         except Exception as exc:          # one bad stock must not stop the scan
             log.exception("scan failed for %s", sym)
             c = SpreadCandidate(sym, "", 0, 0, None, None, 0, flags=_flags_upto(1, True))

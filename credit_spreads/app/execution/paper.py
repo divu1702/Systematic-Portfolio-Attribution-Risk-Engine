@@ -22,6 +22,7 @@ from sqlalchemy import insert, select, update
 
 from ..broker.base import Quote
 from ..data.models import Order, Trade
+from ..risk.sizing import risk_per_lot
 from ..strategy.costs import entry_costs, exit_costs
 
 log = logging.getLogger(__name__)
@@ -123,6 +124,7 @@ class PaperExecutor:
             return EntryResult(False, reason="no credit after fills")
         costs = entry_costs(cfg.costs, short_fill.price, long_fill.price, qty)
         max_loss = (cand.width - credit) * qty
+        risk = risk_per_lot(cfg, credit, cand.width, cand.lot_size) * lots
         margin, fallback = self._margin(cand, qty, short_fill, long_fill, max_loss)
         trade_id = f"T{ts:%Y%m%d%H%M}-{cand.symbol}-{uuid.uuid4().hex[:6]}"
         legs = [
@@ -136,7 +138,7 @@ class PaperExecutor:
             trade_id=trade_id, mode="paper", status="open", candidate_id=None, symbol=cand.symbol,
             sector=meta.get("sector"), side=cand.side, expiry=cand.expiry, legs_json=json.dumps(legs), lots=lots,
             lot_size=cand.lot_size, entry_ts=ts, entry_credit=round(credit, 4), costs=round(costs, 2),
-            max_loss=round(max_loss, 2), margin=margin, margin_fallback=fallback, iv_at_entry=i.get("short_iv"),
+            max_loss=round(max_loss, 2), risk=round(risk, 2), margin=margin, margin_fallback=fallback, iv_at_entry=i.get("short_iv"),
             hv20=i.get("hv20"), ivp=i.get("ivp"), ivp_method=i.get("ivp_method"), level_ref=i.get("level"),
             p_market=cand.p_market, p_model=cand.p_model, breakeven_wr=i.get("breakeven_win_rate"),
             iv_hv=i.get("iv_hv"), short_k=cand.short_k, long_k=cand.long_k, mae=0.0, mfe=0.0,

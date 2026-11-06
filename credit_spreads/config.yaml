@@ -5,7 +5,10 @@
 
 mode: paper            # paper | live
 capital: 500000
-universe: {top_n: 50, turnover_window: 20}            # + turnover_window
+universe:
+  top_n: null               # owner: all F&O stocks (spec had 50); set a number to rank by turnover
+  turnover_window: 20
+  min_avg_turnover: 0       # + rupees/day option premium turnover floor; 0 = off
 dte_min: 15
 dte_max: 35
 events:
@@ -37,7 +40,11 @@ direction: {max_dist_atr: 1.5}                        # + price within this many
 strikes: {delta_min: 0.20, delta_max: 0.30, min_dist_atr: 1.0}
 spread: {widths_steps: [1, 2, 3, 4], min_credit_width: 0.25}
 ev: {hv_weight: 0.5, min_ev_ratio: 0.03}
-liquidity: {max_spread_pct: 0.05, min_oi_lots: 500, min_vol_lots: 50}
+liquidity:
+  max_spread_pct: 0.05
+  min_oi_lots: 0            # owner: off (spec 500); absolute depth check instead
+  min_vol_lots: 0           # owner: off (spec 50)
+  min_depth_cover: 1.0      # + 5-level bid AND ask depth on both legs >= this x order size
 analytics: {hv_window: 20, atr_window: 14, trading_days_per_year: 252, risk_free: 0.065, iv_min: 0.01, iv_max: 5.0}   # +
 broker:                                               # +
   provider: kite           # kite | mock (synthetic market, for tests and demos)
@@ -57,10 +64,14 @@ exit:
   thesis_stop: true
   on_new_event: true
 risk:
+  sizing_basis: stop        # owner: risk = loss at the hard stop (spec: max loss)
+  stop_overshoot: 1.25      # + allowance for a stop filling past its trigger
   per_trade: 0.02
   max_open: 5
   max_same_direction: 3
   max_total: 0.08
+  gap_cap_per_trade: 0.05   # + full max loss per trade (a gap through the stop) <= 5% of equity
+  gap_cap_total: 0.20       # + combined full max loss of open spreads <= 20% of equity
   max_per_sector: 1
   max_margin_util: 0.50
   daily_stop: 0.03

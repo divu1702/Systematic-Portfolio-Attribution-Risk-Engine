@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import logging
 from datetime import date, timedelta
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 from sqlalchemy import Engine, delete, func, select
 from sqlalchemy.dialects.sqlite import insert
@@ -98,9 +98,13 @@ def average_turnover(engine: Engine, through: date, window: int, cal: TradingCal
     return {sym: float(avg) for sym, avg, _n in rows}
 
 
-def universe(engine: Engine, stocks: List[str], through: date, top_n: int, window: int,
-             cal: TradingCalendar) -> List[str]:
-    """F1: F&O stocks ranked by average daily stock-option turnover; top N."""
+def universe(engine: Engine, stocks: List[str], through: date, top_n: Optional[int], window: int,
+             cal: TradingCalendar, min_avg_turnover: float = 0.0) -> List[str]:
+    """F1. Default: every F&O stock (liquidity is judged per option leg in F9). Optionally keep only
+    stocks above an absolute average turnover, and/or the top N by turnover."""
+    if not top_n and not min_avg_turnover:
+        return list(stocks)
     avg = average_turnover(engine, through, window, cal)
-    ranked = sorted((s for s in stocks if s in avg), key=lambda s: avg[s], reverse=True)
-    return ranked[:top_n]
+    keep = [s for s in stocks if s in avg and avg[s] >= min_avg_turnover]
+    ranked = sorted(keep, key=lambda s: avg[s], reverse=True)
+    return ranked[:top_n] if top_n else ranked

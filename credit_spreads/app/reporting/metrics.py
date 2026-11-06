@@ -13,9 +13,7 @@ from sqlalchemy.orm import Session
 
 from ..data.models import Candidate, Equity, Order, Trade
 
-STAGES = ["F1 universe", "DTE window", "data", "F2 events", "F3 IV/HV", "F4 IV percentile", "F5 cause passed",
-          "direction", "F6 level buffer", "F7 distance/delta", "risk budget", "F9 liquidity", "F8 credit/width",
-          "EV", "accepted"]
+from ..strategy.scanner import STAGES  # noqa: E402  (single source of truth for the funnel order)
 
 
 def closed_trades(engine, start: Optional[date] = None, end: Optional[date] = None) -> List[Trade]:

@@ -87,6 +87,15 @@ These could not be verified offline (the build machine has no access to Zerodha 
 - Event data fails closed: stale data, no results history, an event before expiry, or (configurable)
   results estimated to fall in the window all reject the stock.
 
+## Risk and universe (owner's rules)
+
+- Size by the loss at the hard stop: a stop at 2x credit loses about 1x credit (x1.25 allowance for
+  fills past the trigger). 2% of equity per trade, 8% across open spreads, on that basis.
+- Gap guard: full max loss (what a gap straight through the stop would cost) is capped at 5% of equity
+  per trade and 20% in total.
+- Every F&O stock is scanned. A spread qualifies on liquidity if both legs have a two-sided quote with
+  bid-ask within 5% of mid and enough bids and asks in the 5-level book to fill the planned size.
+
 ## Configuration
 
 Every threshold is in `config.yaml`, validated on load; unknown keys are an error. Keys marked `# +` are

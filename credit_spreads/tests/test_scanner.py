@@ -71,16 +71,31 @@ def _quote(bid, ask, oi, volume):
 
 
 def test_liquidity_rules(cfg):
-    class C:
-        pass
-    c = C()
-    c.cfg = cfg
+    from types import SimpleNamespace
+
+    c = SimpleNamespace(cfg=cfg)
     lot = 100
-    assert liquidity_ok(c, _quote(10, 10.4, 60_000, 6_000), lot) == (True, "")
+    assert liquidity_ok(c, _quote(10, 10.4, 0, 0), lot) == (True, "")        # OI/volume off by default
     assert not liquidity_ok(c, _quote(10, 11, 60_000, 6_000), lot)[0]         # 9.5% wide
-    assert "OI" in liquidity_ok(c, _quote(10, 10.4, 40_000, 6_000), lot)[1]   # 400 lots
-    assert "volume" in liquidity_ok(c, _quote(10, 10.4, 60_000, 4_000), lot)[1]
     assert not liquidity_ok(c, _quote(0, 10.4, 60_000, 6_000), lot)[0]
+    strict = SimpleNamespace(cfg=cfg.model_copy(update={"liquidity": cfg.liquidity.model_copy(
+        update={"min_oi_lots": 500, "min_vol_lots": 50})}))
+    assert "OI" in liquidity_ok(strict, _quote(10, 10.4, 40_000, 6_000), lot)[1]   # 400 lots
+    assert "volume" in liquidity_ok(strict, _quote(10, 10.4, 60_000, 4_000), lot)[1]
+
+
+def test_depth_must_cover_order_both_sides(cfg):
+    from types import SimpleNamespace
+
+    from app.strategy.scanner import depth_ok
+
+    c = SimpleNamespace(cfg=cfg)
+    deep = Quote("NFO:A", None, 10, tuple(Level(10 - i * 0.05, 300) for i in range(5)),
+                 tuple(Level(10.1 + i * 0.05, 300) for i in range(5)), 0, 0)
+    thin_ask = Quote("NFO:B", None, 5, deep.bids, (Level(5.1, 200),), 0, 0)
+    assert depth_ok(c, deep, deep, 1500) == (True, "")
+    ok, why = depth_ok(c, deep, thin_ask, 1000)
+    assert not ok and "long leg depth" in why
 
 
 # ----------------------------------------------------------------------------- scan on the mock
@@ -90,7 +105,16 @@ def _ctx_at(cfg, tmp_path, when=SIM_NOW, name="scan.db"):
                          market=shared_market())
 
 
-def test_scan_without_turnover_rejects_everything_at_f1(cfg, tmp_path):
+def test_default_universe_is_every_fno_stock(cfg, tmp_path):
+    ctx = _ctx_at(cfg, tmp_path)
+    morning_refresh(ctx)
+    res = run_scan(ctx)
+    assert res.funnel["F1 universe"] == 0 and len(res.outcomes) == 8
+
+
+def test_scan_without_turnover_rejects_everything_at_f1(raw_config, write_config, tmp_path):
+    raw_config["universe"]["top_n"] = 5                  # ranking mode needs bhavcopy turnover
+    cfg = load_config(write_config(raw_config))
     ctx = _ctx_at(cfg, tmp_path)
     morning_refresh(ctx)
     res = run_scan(ctx)

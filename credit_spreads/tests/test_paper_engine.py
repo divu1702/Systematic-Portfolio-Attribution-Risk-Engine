@@ -86,6 +86,24 @@ def test_size_and_check_limits(mock_ctx):
     assert any("already has" in x for x in size_and_check(mock_ctx, _Cand("B"), "Q", 1, [_T("B", "bear_call", 1, "W")], eq)[1])
 
 
+def test_stop_basis_sizing(mock_ctx):
+    from app.risk.sizing import plan_lots, risk_at_stop_per_share, risk_per_lot
+
+    cfg = mock_ctx.cfg                                   # stop 2x, overshoot 1.25, budget 2%, gap cap 5%
+    assert risk_at_stop_per_share(cfg, 3.0, 10.0) == pytest.approx(3.75)
+    assert risk_at_stop_per_share(cfg, 6.0, 10.0) == pytest.approx(4.0)      # capped at max loss
+    assert risk_per_lot(cfg, 3.0, 10.0, 1000) == pytest.approx(3750)
+    # 10,000 budget / 3,750 -> 2 lots; gap cap 25,000 / 7,000 max loss -> 3 lots; take 2
+    assert plan_lots(cfg, 500_000, 3750, 7000) == (2, "")
+    # gap cap binds: max loss 13,000/lot -> only 1 lot fits 25,000
+    assert plan_lots(cfg, 500_000, 3000, 13_000) == (1, "")
+    lots, why = plan_lots(cfg, 500_000, 3000, 30_000)
+    assert lots == 0 and "gap cap" in why
+    c = _Cand(max_loss=7000)
+    c.risk_per_lot = 3750
+    assert size_and_check(mock_ctx, c, "Z", 1, [], 500_000) == (2, [])
+
+
 def test_kill_switches(mock_ctx):
     assert kill_switches(mock_ctx, 500_000) == []
     state.put(mock_ctx.engine, state.KILLED, "telegram /kill")
@@ -115,8 +133,12 @@ def test_entries_record_trade_orders_and_alerts(traded):
     assert any(m.startswith("ENTRY") for m in msgs)
     t = trades[0]
     assert t.mode == "paper" and t.lots >= 1 and t.entry_credit > 0 and t.costs > 0
-    assert t.max_loss <= ctx.cfg.risk.per_trade * ctx.cfg.capital + 1e-6
-    assert sum(x.max_loss for x in trades) <= ctx.cfg.risk.max_total * ctx.cfg.capital + 1e-6
+    r, cap = ctx.cfg.risk, ctx.cfg.capital
+    assert t.risk <= r.per_trade * cap + 1e-6                        # sized by loss at the stop
+    assert t.risk < t.max_loss                                       # stop risk is below full max loss
+    assert t.max_loss <= r.gap_cap_per_trade * cap + 1e-6            # gap cap on full max loss
+    assert sum(x.risk for x in trades) <= r.max_total * cap + 1e-6
+    assert sum(x.max_loss for x in trades) <= r.gap_cap_total * cap + 1e-6
     assert len({x.sector for x in trades}) == len(trades)              # max 1 per sector
     with Session(ctx.engine) as s:
         orders = list(s.scalars(select(Order).where(Order.trade_id == t.trade_id).order_by(Order.ts, Order.leg)))

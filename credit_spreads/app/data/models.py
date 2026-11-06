@@ -159,6 +159,7 @@ class Trade(Base):
     short_k: Mapped[Optional[float]] = mapped_column(Float)
     long_k: Mapped[Optional[float]] = mapped_column(Float)
     replayed: Mapped[bool] = mapped_column(Boolean, default=False)
+    risk: Mapped[Optional[float]] = mapped_column(Float)
 
 
 class Mark(Base):

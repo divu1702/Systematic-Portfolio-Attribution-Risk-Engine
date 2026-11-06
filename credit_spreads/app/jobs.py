@@ -34,7 +34,9 @@ def catch_up_daily(ctx, through: date) -> None:
     if not ctx.cache.get(marker):
         refresh_levels(ctx, stocks, through)
         ctx.cache[marker] = True
-    refdata.refresh_turnover(ctx, through, ctx.cfg.universe.turnover_window)
+    u = ctx.cfg.universe
+    if u.top_n or u.min_avg_turnover:          # only needed when F1 ranks by turnover
+        refdata.refresh_turnover(ctx, through, u.turnover_window)
 
 
 def scan_job(ctx, enter: bool = False):

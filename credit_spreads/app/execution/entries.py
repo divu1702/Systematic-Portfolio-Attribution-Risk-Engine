@@ -11,7 +11,7 @@ from ..data import refdata
 from ..data.instruments import load_chain
 from ..fmt import inr
 from ..risk.limits import kill_switches, open_trades, size_and_check, stale_quotes
-from ..risk.sizing import current_equity
+from ..risk.sizing import current_equity, risk_per_lot
 from ..strategy.spreads import option_type
 
 log = logging.getLogger(__name__)
@@ -48,10 +48,12 @@ def enter_from_scan(ctx, executor, result) -> List[str]:
             msgs.append(f"REJECTED {cand.symbol}: {res.reason}")
             continue
         max_loss = (cand.width - res.credit) * lots * cand.lot_size
+        risk = risk_per_lot(ctx.cfg, res.credit, cand.width, cand.lot_size) * lots
         msgs.append(
             f"ENTRY {cand.symbol} {cand.side.replace('_', ' ')} {cand.short_k:g}/{cand.long_k:g} {cand.expiry} "
             f"x{lots} lot(s) of {cand.lot_size}: credit {res.credit:.2f}/share "
-            f"({inr(res.credit * lots * cand.lot_size)}), max loss {inr(max_loss)}, margin {inr(res.margin)}"
+            f"({inr(res.credit * lots * cand.lot_size)}), risk at stop {inr(risk)}, max loss (gap) {inr(max_loss)}, "
+            f"margin {inr(res.margin)}"
             f"{' [margin fallback]' if res.margin_fallback else ''}, p_model {cand.p_model:.0%}")
     for m in msgs:
         ctx.notifier.send(m, "entry" if m.startswith("ENTRY") else "rejection")

@@ -20,6 +20,34 @@ def risk_budget(ctx, equity: float = None) -> float:
     return ctx.cfg.risk.per_trade * (current_equity(ctx) if equity is None else equity)
 
 
+def risk_at_stop_per_share(cfg, credit: float, width: float) -> float:
+    """Planned loss per share if the hard stop fires: (stop_mult - 1) x credit, plus an overshoot
+    allowance because stops fill at the first mark past the trigger; never more than max loss."""
+    return min((cfg.exit.stop_mult - 1.0) * credit * cfg.risk.stop_overshoot, width - credit)
+
+
+def risk_per_lot(cfg, credit: float, width: float, lot: int) -> float:
+    """Rupees per lot on the configured sizing basis."""
+    if cfg.risk.sizing_basis == "stop":
+        return risk_at_stop_per_share(cfg, credit, width) * lot
+    return (width - credit) * lot
+
+
+def plan_lots(cfg, equity: float, risk_lot: float, max_loss_lot: float):
+    """(lots, reason if zero): floor of the per-trade budget over risk per lot, further limited by
+    the per-trade gap cap on full max loss."""
+    lots = lots_for(cfg.risk.per_trade * equity, risk_lot)
+    if lots == 0:
+        return 0, f"risk per lot {risk_lot:,.0f} exceeds the per-trade budget {cfg.risk.per_trade * equity:,.0f}"
+    if cfg.risk.gap_cap_per_trade:
+        cap = lots_for(cfg.risk.gap_cap_per_trade * equity, max_loss_lot)
+        if cap == 0:
+            return 0, (f"max loss per lot {max_loss_lot:,.0f} exceeds the gap cap "
+                       f"{cfg.risk.gap_cap_per_trade * equity:,.0f}")
+        lots = min(lots, cap)
+    return lots, ""
+
+
 def lots_for(budget: float, max_loss_per_lot: float) -> int:
     """floor(budget / max loss per lot); zero means skip, never round up."""
     if max_loss_per_lot <= 0:

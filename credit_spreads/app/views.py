@@ -119,9 +119,10 @@ def status_report(ctx) -> str:
     trades = open_trades(ctx.engine)
     if trades:
         rows = [[t.symbol, t.side.replace("_", " "), f"{t.short_k:g}/{t.long_k:g}", str(t.expiry), t.lots,
-                 f"{t.entry_credit:.2f}", inr(t.max_loss), inr(t.mfe or 0), inr(t.mae or 0)] for t in trades]
-        lines += ["", table(["symbol", "side", "strikes", "expiry", "lots", "credit", "max loss", "MFE", "MAE"], rows,
-                            align="lllllrrrr")]
+                 f"{t.entry_credit:.2f}", inr(t.risk or t.max_loss), inr(t.max_loss), inr(t.mfe or 0),
+                 inr(t.mae or 0)] for t in trades]
+        lines += ["", table(["symbol", "side", "strikes", "expiry", "lots", "credit", "risk at stop", "max loss",
+                             "MFE", "MAE"], rows, align="lllllrrrrr")]
     else:
         lines.append("No open spreads.")
     return "\n".join(lines)

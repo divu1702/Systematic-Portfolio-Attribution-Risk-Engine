@@ -14,12 +14,17 @@ from sqlalchemy.orm import Session
 from ..clock import parse_hhmm
 from ..data import state
 from ..data.models import Order, Trade
-from .sizing import current_equity, lots_for
+from .sizing import current_equity, lots_for, plan_lots
 
 
 def open_trades(engine) -> List[Trade]:
     with Session(engine) as s:
         return list(s.scalars(select(Trade).where(Trade.status == "open").order_by(Trade.entry_ts)))
+
+
+def position_risk(t) -> float:
+    """Planned risk of an open spread on the sizing basis (older rows fall back to max loss)."""
+    return t.risk if getattr(t, "risk", None) else t.max_loss
 
 
 def realised_today(engine, day) -> float:
@@ -66,17 +71,24 @@ def stale_quotes(ctx, quotes) -> List[str]:
 
 def size_and_check(ctx, cand, sector: str, margin_needed_per_lot: float, open_: List[Trade],
                    equity: float) -> Tuple[int, List[str]]:
-    """Lots = floor(per-trade budget / max loss per lot), reduced if needed to respect the total
-    max-loss cap; then the count, direction, sector and margin limits. Returns (lots, violations)."""
+    """Lots = floor(per-trade budget / risk per lot) on the sizing basis, limited by the per-trade
+    gap cap, then trimmed to fit the total-risk cap and the total gap cap; then the count,
+    direction, sector and margin limits. Returns (lots, violations)."""
     r = ctx.cfg.risk
     v: List[str] = []
-    lots = lots_for(r.per_trade * equity, cand.max_loss)
+    risk_lot = getattr(cand, "risk_per_lot", 0) or cand.max_loss
+    lots, why = plan_lots(ctx.cfg, equity, risk_lot, cand.max_loss)
     if lots == 0:
-        return 0, [f"max loss per lot {cand.max_loss:,.0f} exceeds the per-trade budget {r.per_trade * equity:,.0f}"]
-    room = r.max_total * equity - sum(t.max_loss for t in open_)
-    lots = min(lots, max(0, math.floor(room / cand.max_loss + 1e-9)))
+        return 0, [why]
+    room = r.max_total * equity - sum(position_risk(t) for t in open_)
+    lots = min(lots, max(0, math.floor(room / risk_lot + 1e-9)))
     if lots == 0:
-        v.append(f"total max loss would exceed {r.max_total:.0%} of equity")
+        v.append(f"total risk would exceed {r.max_total:.0%} of equity")
+    elif r.gap_cap_total:
+        gap_room = r.gap_cap_total * equity - sum(t.max_loss for t in open_)
+        lots = min(lots, max(0, math.floor(gap_room / cand.max_loss + 1e-9)))
+        if lots == 0:
+            v.append(f"combined max loss would exceed the {r.gap_cap_total:.0%} gap cap")
     if len(open_) >= r.max_open:
         v.append(f"{len(open_)} spreads open (max {r.max_open})")
     same = sum(1 for t in open_ if t.side == cand.side)

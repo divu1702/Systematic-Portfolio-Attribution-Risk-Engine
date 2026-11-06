@@ -217,6 +217,8 @@ def _cmd_sim(args: argparse.Namespace) -> int:
     cfg = load_config(args.config)
     if args.capital:
         cfg = cfg.model_copy(update={"capital": float(args.capital)})
+    if args.symbols:
+        cfg = cfg.model_copy(update={"broker": cfg.broker.model_copy(update={"mock_symbols": args.symbols})})
     setup_logging(cfg.log_dir, level="WARNING")
     today = SystemClock().today()
     m = SyntheticMarket(seed=args.seed if args.seed is not None else cfg.broker.mock_seed,
@@ -308,6 +310,7 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--outages", type=float, default=0.0,
                     help="probability per day of a 2-hour outage (exercises missed-mark replay)")
     sp.add_argument("--db", help="database file for this run (default data/trading_mock.db)")
+    sp.add_argument("--symbols", type=int, help="number of synthetic stocks (default broker.mock_symbols)")
     sp.set_defaults(func=_cmd_sim)
 
     sp = sub.add_parser("report", help="write the weekly HTML report now")

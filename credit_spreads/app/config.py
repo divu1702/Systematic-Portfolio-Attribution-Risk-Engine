@@ -35,8 +35,11 @@ class _Section(BaseModel):
 
 
 class UniverseCfg(_Section):
-    top_n: PosInt = 50
+    # Owner's choice (Nov 2026): scan every F&O stock and judge liquidity in absolute terms at the
+    # option level (F9), not by relative ranking. Set top_n to rank by option turnover instead.
+    top_n: Optional[PosInt] = None
     turnover_window: PosInt = 20
+    min_avg_turnover: NonNegFloat = 0.0       # rupees/day of stock-option premium turnover; 0 = off
 
 
 class EventsCfg(_Section):
@@ -113,8 +116,10 @@ class EVCfg(_Section):
 
 class LiquidityCfg(_Section):
     max_spread_pct: Fraction = 0.05
-    min_oi_lots: NonNegInt = 500
-    min_vol_lots: NonNegInt = 50
+    min_oi_lots: NonNegInt = 0                # 0 = off (spec default 500); depth check below instead
+    min_vol_lots: NonNegInt = 0               # 0 = off (spec default 50)
+    # 5-level book on bid and ask of both legs must hold this multiple of the order size.
+    min_depth_cover: Annotated[float, Field(gt=0)] = 1.0
 
 
 class AnalyticsCfg(_Section):
@@ -166,10 +171,18 @@ class ExitCfg(_Section):
 
 
 class RiskCfg(_Section):
+    # "stop": risk = loss if the hard stop fires (stop_mult - 1) x credit x stop_overshoot, capped at
+    # max loss. "max_loss": risk = width - credit (the spec's original rule). per_trade and
+    # max_total apply to this basis.
+    sizing_basis: Literal["stop", "max_loss"] = "stop"
+    stop_overshoot: Annotated[float, Field(ge=1)] = 1.25   # stops fill past the trigger
     per_trade: Fraction = 0.02
     max_open: PosInt = 5
     max_same_direction: PosInt = 3
     max_total: Fraction = 0.08
+    # Gap guard: a gap can jump straight past the stop to full max loss. Null disables.
+    gap_cap_per_trade: Optional[Fraction] = 0.05
+    gap_cap_total: Optional[Fraction] = 0.20
     max_per_sector: PosInt = 1
     max_margin_util: Annotated[float, Field(gt=0, le=1)] = 0.50
     daily_stop: Fraction = 0.03

@@ -7,7 +7,9 @@ def test_shipped_config_loads_with_spec_defaults():
     cfg = load_config()
     assert cfg.mode == "paper"
     assert cfg.capital == 500_000
-    assert cfg.universe.top_n == 50
+    assert cfg.universe.top_n is None                 # owner: all F&O stocks
+    assert cfg.risk.sizing_basis == "stop" and cfg.risk.gap_cap_per_trade == 0.05
+    assert (cfg.liquidity.min_oi_lots, cfg.liquidity.min_vol_lots) == (0, 0)
     assert (cfg.dte_min, cfg.dte_max) == (15, 35)
     assert cfg.iv.min_iv_hv_ratio == 1.25
     assert cfg.iv.min_ivp == 70

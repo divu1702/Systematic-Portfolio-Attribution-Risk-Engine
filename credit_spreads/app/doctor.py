@@ -50,7 +50,9 @@ def _config_section(r: Report, cfg: Config, env: Mapping[str, str]) -> None:
     r.row("capital", inr(cfg.capital))
 
     r.heading("Entry filters")
-    r.row("F1 universe", f"top {cfg.universe.top_n} by {cfg.universe.turnover_window}-day option turnover")
+    u = cfg.universe
+    r.row("F1 universe", (f"top {u.top_n} by {u.turnover_window}-day option turnover" if u.top_n else
+                          "all F&O stocks") + (f", turnover >= {inr(u.min_avg_turnover)}/day" if u.min_avg_turnover else ""))
     r.row("F2 event buffer", f"expiry + {cfg.events.buffer_days}d, stale after {cfg.events.max_staleness_days}d")
     r.row("F3 IV / HV20", f">= {cfg.iv.min_iv_hv_ratio}")
     r.row("F4 IV percentile", f">= {cfg.iv.min_ivp:g} over {cfg.iv.ivp_history_days}d "
@@ -60,15 +62,23 @@ def _config_section(r: Report, cfg: Config, env: Mapping[str, str]) -> None:
     r.row("F7 short strike", f"delta {cfg.strikes.delta_min:.2f}-{cfg.strikes.delta_max:.2f}, "
           f">= {cfg.strikes.min_dist_atr} x ATR from spot")
     r.row("F8 credit / width", f">= {pct(cfg.spread.min_credit_width, 0)}")
-    r.row("F9 liquidity", f"bid-ask <= {pct(cfg.liquidity.max_spread_pct, 0)} of mid, "
-          f"OI >= {cfg.liquidity.min_oi_lots} lots, vol >= {cfg.liquidity.min_vol_lots} lots")
+    lc = cfg.liquidity
+    r.row("F9 liquidity", f"bid-ask <= {pct(lc.max_spread_pct, 0)} of mid, 5-level depth >= {lc.min_depth_cover:g}x order "
+          f"on both sides" + (f", OI >= {lc.min_oi_lots} lots" if lc.min_oi_lots else "")
+          + (f", vol >= {lc.min_vol_lots} lots" if lc.min_vol_lots else ""))
     r.row("DTE window", f"{cfg.dte_min}-{cfg.dte_max} calendar days")
     r.row("EV", f"hv_weight {cfg.ev.hv_weight}, EV/max loss >= {pct(cfg.ev.min_ev_ratio)}")
 
     r.heading("Exits and risk")
     r.row("exits", f"stop {cfg.exit.stop_mult}x credit, target {pct(cfg.exit.tp_frac, 0)}, "
           f"time stop T-{cfg.exit.days_before_expiry} trading days")
-    r.row("per trade / total", f"{pct(cfg.risk.per_trade)} / {pct(cfg.risk.max_total)} of equity")
+    rk = cfg.risk
+    basis = (f"loss at stop ({cfg.exit.stop_mult - 1:g}x credit x {rk.stop_overshoot:g})" if rk.sizing_basis == "stop"
+             else "max loss")
+    r.row("sizing basis", basis)
+    r.row("per trade / total", f"{pct(rk.per_trade)} / {pct(rk.max_total)} of equity")
+    r.row("gap caps (max loss)", f"{pct(rk.gap_cap_per_trade) if rk.gap_cap_per_trade else 'off'} per trade / "
+          f"{pct(rk.gap_cap_total) if rk.gap_cap_total else 'off'} total")
     r.row("max open/same side/sector",
           f"{cfg.risk.max_open} / {cfg.risk.max_same_direction} / {cfg.risk.max_per_sector}")
     r.row("daily stop / drawdown pause", f"{pct(cfg.risk.daily_stop)} / {pct(cfg.risk.dd_pause)}")
