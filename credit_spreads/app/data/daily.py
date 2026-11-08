@@ -60,7 +60,8 @@ def _recompute(engine: Engine, sym: str, atr_n: int, hv_n: int, per_year: int,
         return
     df["atr14"] = vol.atr(df["high"], df["low"], df["close"], atr_n)
     df["hv20"] = vol.hv(df["close"], hv_n, per_year)
-    df["hv_pctile_252"] = vol.rolling_percentile_rank(df["hv20"], 252)
+    n_new = int((df.index >= since).sum()) if since is not None else None
+    df["hv_pctile_252"] = vol.rolling_percentile_rank(df["hv20"], 252, last_n=n_new)
     if since is not None:
         df = df[df.index >= since]
     with engine.begin() as conn:

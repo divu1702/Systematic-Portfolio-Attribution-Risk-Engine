@@ -105,7 +105,7 @@ costs:                 # update when broker or exchange rates change
   sebi_fee_per_crore: 10
   stamp_buy_pct: 0.00003
   gst: 0.18
-ops: {backup_keep: 14, heartbeat: true}               # + daily DB backups; end-of-day summary alert
+ops: {backup_keep: 14, heartbeat: true, record_market: true}   # + backups; EOD alert; record quotes for backtests
 market: {name: nse, currency: INR}                    # + backtests on other markets override this
 paths:                                                # + relative to this file's folder
   db: data/trading.db
@@ -117,3 +117,4 @@ paths:                                                # + relative to this file'
   kite_session: data/kite_session.json   # today's access token only; expires next morning
   fixtures: fixtures
   imports: imports          # + drop NSE event CSV exports into imports/events/
+  market_store: data/market_nse.db   # + recorded NSE quotes (real bid/ask) for future backtests

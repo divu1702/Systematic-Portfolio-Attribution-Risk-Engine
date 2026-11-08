@@ -52,6 +52,27 @@ def us_config(cfg: Config, capital: float = 100_000.0, per_contract: float = 0.7
     })
 
 
+def nse_config(cfg: Config, capital: Optional[float] = None) -> Config:
+    """Indian profile for replaying the recorded NSE store: the configured rupee capital and Zerodha
+    costs, end-of-day replay only, and no recording/backups/heartbeat from inside a backtest."""
+    return cfg.model_copy(update={
+        "capital": float(capital or cfg.capital),
+        "monitor": cfg.monitor.model_copy(update={"replay_missed": False}),
+        "ops": cfg.ops.model_copy(update={"record_market": False, "backup_keep": 0, "heartbeat": False}),
+    })
+
+
+def store_universe(store_path: Path) -> Dict[str, str]:
+    """Symbols (and recorded sectors) present in a market store."""
+    conn = sqlite3.connect(f"file:{store_path}?mode=ro", uri=True)
+    try:
+        secs = dict(conn.execute("SELECT symbol, sector FROM sectors").fetchall())
+        syms = [r[0] for r in conn.execute("SELECT DISTINCT symbol FROM chain_days_loaded WHERE rows > 0")]
+    finally:
+        conn.close()
+    return {s: secs.get(s, "UNKNOWN") for s in syms}
+
+
 def trading_days(store_path: Path, start: date, end: date, min_share: float = 0.5,
                  symbols: Optional[Sequence[str]] = None) -> List[date]:
     """Days in range where most of the universe's symbols have a bar and loaded option chains."""
@@ -88,19 +109,23 @@ class BacktestRun:
 
 def make_context(cfg: Config, store_path: Path, db_path: Path, first_day: date,
                  universe: Optional[Dict[str, str]] = None, notice_days: int = 14) -> Context:
-    universe = universe or read_universe(UNIVERSE_US)
+    universe = universe or (read_universe(UNIVERSE_US) if cfg.market.name == "us" else store_universe(store_path))
     for suffix in ("", "-wal", "-shm"):
         p = Path(str(db_path) + suffix)
         if p.exists():
             p.unlink()
     clock = SimClock(datetime.combine(first_day, time(8, 0)))
-    broker = HistoricalBroker(store_path, clock, list(universe), r=cfg.analytics.risk_free)
+    us = cfg.market.name == "us"
+    broker = HistoricalBroker(store_path, clock, list(universe), r=cfg.analytics.risk_free,
+                              lot=100 if us else 1, tick=0.01 if us else 0.05)
     engine = init_db(db_path)
     set_currency(cfg.market.currency)
     ctx = Context(cfg, {}, clock, engine, broker, LogNotifier(keep=20000),
                   nse=HistoricalExchange(store_path, clock, list(universe), universe, notice_days))
     ctx.banner = (f"Backtest on real end-of-day US option quotes (DoltHub), {len(universe)} stocks. "
-                  "Stops checked once a day at the close; fills at closing bid/ask plus slippage.")
+                  "Stops checked once a day at the close; fills at closing bid/ask plus slippage." if us else
+                  f"Backtest on NSE quotes recorded by this system at each 15:00 scan, {len(universe)} stocks. "
+                  "Stops checked once a day; fills at recorded bid/ask with recorded depth.")
     return ctx
 
 

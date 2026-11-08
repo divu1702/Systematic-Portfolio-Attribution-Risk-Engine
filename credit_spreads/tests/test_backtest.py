@@ -187,3 +187,50 @@ def test_us_config_costs_per_contract():
     assert order_cost(cfg.costs, "SELL", 1.5, 300, lot=100).total == pytest.approx(3 * 0.70)
     assert round_trip_costs(cfg.costs, 1.5, 0.6, 100, lot=100) == pytest.approx(4 * 0.70)
     assert cfg.market.currency == "USD" and not cfg.monitor.replay_missed
+
+
+def test_live_recorder_builds_a_replayable_nse_store(mock_ctx, tmp_path):
+    """Record one day from the (mock) live system, then replay it with the historical broker."""
+    from datetime import datetime, time
+
+    from app.jobs import eod_job, morning_refresh, scan_job
+
+    mock_ctx.is_mock = False                       # the recorder is off for mock contexts
+    try:
+        morning_refresh(mock_ctx)
+        scan_job(mock_ctx)
+        mock_ctx.clock.set(datetime.combine(mock_ctx.clock.today(), time(15, 35)))
+        eod_job(mock_ctx)
+    finally:
+        mock_ctx.is_mock = True
+    store = mock_ctx.cfg.resolve(mock_ctx.cfg.paths.market_store)
+    conn = sqlite3.connect(store)
+    n_chain = conn.execute("SELECT COUNT(*) FROM chains").fetchone()[0]
+    n_extra = conn.execute("SELECT COUNT(*) FROM chain_extras WHERE lot > 0 AND bid_depth >= bid_qty").fetchone()[0]
+    n_fut = conn.execute("SELECT COUNT(*) FROM futures").fetchone()[0]
+    n_bars = conn.execute("SELECT COUNT(*) FROM bars").fetchone()[0]
+    n_ev = conn.execute("SELECT COUNT(*) FROM events_seen").fetchone()[0]
+    with_iv = conn.execute("SELECT COUNT(*) FROM chains WHERE iv > 0").fetchone()[0]
+    conn.close()
+    assert n_chain > 100 and n_extra == n_chain and n_fut > 0 and n_bars >= 8 and n_ev > 0
+    assert with_iv > 0.8 * n_chain
+
+    uni = runner.store_universe(store)
+    assert uni and all(sec != "UNKNOWN" for sec in uni.values())        # sectors were recorded
+    cfg = runner.nse_config(mock_ctx.cfg)
+    d = mock_ctx.clock.today()
+    ctx = runner.make_context(cfg, store, tmp_path / "replay.db", d, uni)
+    ctx.clock.set(datetime.combine(d, time(15, 25)))
+    rows = ctx.broker.instruments("NFO")
+    spec = mock_ctx.broker.market.spec(next(iter(uni)))
+    lots = {r["lot_size"] for r in rows if r["name"] == spec.name}
+    assert lots == {spec.lot}                                            # recorded lot size, not a default
+    opt = next(r for r in rows if r["instrument_type"] == "PE" and r["name"] == spec.name)
+    q = ctx.broker.quotes([f"NFO:{opt['tradingsymbol']}"])[f"NFO:{opt['tradingsymbol']}"]
+    assert q.bids and q.asks and q.bids[0].quantity % spec.lot == 0       # recorded depth, in lots
+    fut = next(r for r in rows if r["instrument_type"] == "FUT" and r["name"] == spec.name)
+    fq = ctx.broker.quotes([f"NFO:{fut['tradingsymbol']}"])[f"NFO:{fut['tradingsymbol']}"]
+    assert fq.last > 0
+    assert "NSE quotes recorded" in ctx.banner
+    from app.fmt import set_currency
+    set_currency("INR")

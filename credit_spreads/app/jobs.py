@@ -76,5 +76,11 @@ def eod_job(ctx):
     except Exception as exc:          # a failed backup must not stop the end-of-day job
         log.warning("database backup failed: %s", exc)
         ctx.notifier.send(f"Database backup failed: {exc}", "warning")
+    try:
+        from .data.market_recorder import record_eod
+
+        record_eod(ctx)
+    except Exception as exc:
+        log.warning("could not record end-of-day market data: %s", exc)
     heartbeat(ctx, point)
     return point

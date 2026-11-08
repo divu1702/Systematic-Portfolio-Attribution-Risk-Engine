@@ -285,6 +285,7 @@ class MarketCfg(_Section):
 class OpsCfg(_Section):
     backup_keep: NonNegInt = 14         # daily database copies kept; 0 = no backups
     heartbeat: bool = True              # end-of-day summary alert (silence means the system is down)
+    record_market: bool = True          # save each scan's quotes to paths.market_store for backtests
 
 
 class PathsCfg(_Section):
@@ -296,6 +297,7 @@ class PathsCfg(_Section):
     holidays_manual: str = "holidays_manual.csv"
     kite_session: str = "data/kite_session.json"
     imports: str = "imports"                   # imports/events/*.csv: event exports from nseindia.com
+    market_store: str = "data/market_nse.db"   # recorded NSE quotes for backtests
     fixtures: str = "fixtures"
 
 

@@ -15,6 +15,10 @@ Each entry names the keys changed, old and new values, and the evidence.
   F2 fails closed and event CSV exports dropped into `imports/events/` keep F2 working.
 - Every candidate and trade records `config_hash`; `config_versions` stores the full thresholds.
 - End-of-day: daily SQLite backup (`ops.backup_keep`), heartbeat alert (`ops.heartbeat`).
+- Live market recorder (`ops.record_market`): each scan's Kite quotes, sizes, OI, volume, lot sizes and
+  futures prices, plus bars, sectors and first-seen event dates, saved to `paths.market_store`;
+  `backtest run --market nse` replays it.
+- Faster end-of-day indicators (ATR in numpy, HV percentile only for new rows).
 
 ### Owner decisions, 6 Nov 2026 (before any paper trades)
 - Risk is sized by the loss at the hard stop, not by maximum loss: `risk.sizing_basis: stop`.

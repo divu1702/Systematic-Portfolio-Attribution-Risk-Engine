@@ -33,7 +33,9 @@ from ..broker.base import Broker
 from ..clock import Clock
 
 EXPIRY_TIME = time(16, 0)
-_KEY = re.compile(r"^(?P<sym>[A-Z][A-Z.]*?)(?P<ymd>\d{6})(?P<rest>FUT|\d+(?:\.\d+)?(?:CE|PE))$")
+# Internal contract names use "_" separators so any ticker parses, including NSE names with digits,
+# "&" or "-" (M&M, BAJAJ-AUTO, 360ONE): SYMBOL_YYMMDD_STRIKE_CE / SYMBOL_YYMMDD_FUT.
+_KEY = re.compile(r"^(?P<sym>.+)_(?P<ymd>\d{6})_(?P<rest>FUT|\d+(?:\.\d+)?_(?:CE|PE))$")
 
 
 def fmt_strike(k: float) -> str:
@@ -41,11 +43,11 @@ def fmt_strike(k: float) -> str:
 
 
 def option_symbol(sym: str, expiry: date, strike: float, cp: str) -> str:
-    return f"{sym}{expiry:%y%m%d}{fmt_strike(strike)}{cp}"
+    return f"{sym}_{expiry:%y%m%d}_{fmt_strike(strike)}_{cp}"
 
 
 def future_symbol(sym: str, expiry: date) -> str:
-    return f"{sym}{expiry:%y%m%d}FUT"
+    return f"{sym}_{expiry:%y%m%d}_FUT"
 
 
 def _token(*parts) -> int:
@@ -58,6 +60,9 @@ class _Day:
     spot: Dict[str, float]
     chain: Dict[str, Dict[Tuple[date, float, str], Tuple[float, float, float]]]   # sym -> (exp, K, cp) -> (bid, ask, iv)
     expiries: Dict[str, List[date]]
+    extras: Dict[Tuple[str, date, float, str], tuple] = None    # recorded lot, tick, sizes, OI, volume
+    futures: Dict[Tuple[str, date], float] = None                # recorded futures mid
+    lots: Dict[str, Tuple[int, float]] = None                    # recorded lot size and tick per symbol
 
 
 class HistoricalBroker(Broker):
@@ -101,8 +106,28 @@ class HistoricalBroker(Broker):
                 e = date.fromisoformat(exp)
                 chain.setdefault(sym, {})[(e, float(k), cp)] = (bid or 0.0, ask or 0.0, iv or 0.0)
                 exps.setdefault(sym, set()).add(e)
-            self._days[d] = _Day(d, spot, chain, {s: sorted(v) for s, v in exps.items()})
+            extras = {(sym, date.fromisoformat(exp), float(k), cp): rest for sym, exp, k, cp, *rest in self.conn.execute(
+                "SELECT symbol, expiration, strike, cp, lot, tick, bid_qty, ask_qty, bid_depth, ask_depth, oi, volume "
+                "FROM chain_extras WHERE date=?", (str(d),))} if self._has("chain_extras") else {}
+            futs = {(sym, date.fromisoformat(exp)): ((b + a) / 2 if b and a else last)
+                    for sym, exp, b, a, last in self.conn.execute(
+                        "SELECT symbol, expiration, bid, ask, last FROM futures WHERE date=?", (str(d),))
+                    } if self._has("futures") else {}
+            lots = {}
+            for (sym, _e, _k, _cp), ex in extras.items():
+                if ex[0] and sym not in lots:
+                    lots[sym] = (int(ex[0]), float(ex[1] or self.tick))
+            self._days[d] = _Day(d, spot, chain, {s: sorted(v) for s, v in exps.items()}, extras, futs, lots)
         return self._days[d]
+
+    def _has(self, table: str) -> bool:
+        if not hasattr(self, "_tables"):
+            self._tables = {r[0] for r in self.conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        return table in self._tables
+
+    def _lot_tick(self, sym: str) -> Tuple[int, float]:
+        """Recorded lot size and tick for a symbol on the clock's day, else the defaults."""
+        return (self._day(self.clock.today()).lots or {}).get(sym, (self.lot, self.tick))
 
     def _T(self, expiry: date) -> float:
         return black76.year_fraction((datetime.combine(expiry, EXPIRY_TIME) - self.clock.now()).total_seconds())
@@ -111,6 +136,9 @@ class HistoricalBroker(Broker):
         day = self._day(self.clock.today())
         key = (day.d, sym, expiry)
         if key in self._fwd:
+            return self._fwd[key]
+        if day.futures and day.futures.get((sym, expiry)):
+            self._fwd[key] = day.futures[(sym, expiry)]          # a recorded futures price is the forward
             return self._fwd[key]
         S = day.spot.get(sym)
         if S is None:
@@ -149,18 +177,20 @@ class HistoricalBroker(Broker):
             if exchange == "NSE":
                 rows.append(self._row(_token("EQ", sym), sym, sym, "EQ", None, 0.0, 1, "NSE", "NSE"))
                 continue
+            lot, tick = self._lot_tick(sym)
             for e in day.expiries.get(sym, []):
-                rows.append(self._row(_token("FUT", sym, e), future_symbol(sym, e), sym, "FUT", e, 0.0, self.lot,
-                                      "NFO-FUT", "NFO"))
+                rows.append(self._row(_token("FUT", sym, e), future_symbol(sym, e), sym, "FUT", e, 0.0, lot,
+                                      "NFO-FUT", "NFO", tick))
             for (e, k, cp) in day.chain.get(sym, {}):
                 rows.append(self._row(_token("OPT", sym, e, fmt_strike(k), cp), option_symbol(sym, e, k, cp), sym,
-                                      cp, e, k, self.lot, "NFO-OPT", "NFO"))
+                                      cp, e, k, lot, "NFO-OPT", "NFO", tick))
         return rows
 
-    def _row(self, token, tsym, name, itype, expiry, strike, lot, segment, exchange) -> dict:
+    def _row(self, token, tsym, name, itype, expiry, strike, lot, segment, exchange, tick=None) -> dict:
         return {"instrument_token": token, "exchange_token": str(token % 100000), "tradingsymbol": tsym,
-                "name": name, "last_price": 0.0, "expiry": expiry, "strike": float(strike), "tick_size": self.tick,
-                "lot_size": lot, "instrument_type": itype, "segment": segment, "exchange": exchange}
+                "name": name, "last_price": 0.0, "expiry": expiry, "strike": float(strike),
+                "tick_size": tick or self.tick, "lot_size": lot, "instrument_type": itype, "segment": segment,
+                "exchange": exchange}
 
     def _book(self, bid: float, ask: float, qty: int) -> dict:
         lv = lambda px, i, sign: {"price": round(px + sign * i * self.tick, 4), "quantity": qty, "orders": 1}  # noqa: E731
@@ -172,6 +202,22 @@ class HistoricalBroker(Broker):
         now = self.clock.now()
         return {"instrument_token": 0, "timestamp": now, "last_trade_time": now, "last_price": last,
                 "volume": 0, "oi": 0, "depth": self._book(bid, ask, qty), "modelled": modelled}
+
+    def _recorded_quote(self, bid: float, ask: float, ex: tuple) -> dict:
+        lot, tick, bq, aq, bd, ad, oi, vol = ex
+        tick = tick or self.tick
+        now = self.clock.now()
+        def side(px, top, total, sign):
+            if not px or px <= 0 or not top:
+                return []
+            levels = [{"price": px, "quantity": int(top), "orders": 1}]
+            rest = int((total or top) - top)
+            if rest > 0:
+                levels.append({"price": round(px + sign * tick, 4), "quantity": rest, "orders": 1})
+            return levels
+        return {"instrument_token": 0, "timestamp": now, "last_trade_time": now, "last_price": round((bid + ask) / 2, 2),
+                "volume": int(vol or 0), "oi": int(oi or 0), "modelled": False,
+                "depth": {"buy": side(bid, bq, bd, -1), "sell": side(ask, aq, ad, +1)}}
 
     def _last_seen(self, sym: str, e: date, k: float, cp: str) -> Optional[Tuple[float, float, float]]:
         row = self.conn.execute(
@@ -225,12 +271,16 @@ class HistoricalBroker(Broker):
                 if F:
                     out[key] = self._quote(F, F, F, 10**7)
                 continue
-            k, cp = float(rest[:-2]), rest[-2:]
+            k, cp = float(rest[:-3]), rest[-2:]
             hit = day.chain.get(sym, {}).get((e, k, cp))
             if hit and (hit[0] > 0 or hit[1] > 0):
                 bid, ask, _iv = hit
                 self.real_quotes += 1
-                out[key] = self._quote(round((bid + ask) / 2, 2), bid, ask, self.depth_lots * self.lot)
+                ex = (day.extras or {}).get((sym, e, k, cp))
+                if ex:                       # recorded size: top of book, rest of the 5-level depth one tick out
+                    out[key] = self._recorded_quote(bid, ask, ex)
+                else:
+                    out[key] = self._quote(round((bid + ask) / 2, 2), bid, ask, self.depth_lots * self.lot)
             else:
                 q = self._model_option(sym, e, k, cp)
                 if q:
@@ -264,7 +314,7 @@ class HistoricalBroker(Broker):
         for o in orders:
             m = _KEY.match(o["tradingsymbol"])
             rest = m.group("rest") if m else ""
-            k = float(rest[:-2]) if rest and rest != "FUT" else 0.0
+            k = float(rest[:-3]) if rest and rest != "FUT" else 0.0
             legs.append((o["transaction_type"], k, o["quantity"]))
         sells = [x for x in legs if x[0] == "SELL"]
         buys = [x for x in legs if x[0] == "BUY"]
@@ -291,6 +341,14 @@ class HistoricalExchange:
     def events(self, start: date, end: date) -> List[dict]:
         today = self.clock.today()
         out = []
+        has_seen = self.conn.execute("SELECT name FROM sqlite_master WHERE name='events_seen'").fetchone()
+        if has_seen:                       # recorded live: exactly what was known, and since when
+            for sym, d, typ, first in self.conn.execute(
+                    "SELECT symbol, event_date, event_type, first_seen FROM events_seen WHERE event_date BETWEEN ? AND ?",
+                    (str(start), str(end))):
+                if sym in self.symbols and date.fromisoformat(first[:10]) <= today:
+                    out.append({"symbol": sym, "event_date": date.fromisoformat(d), "event_type": typ,
+                                "description": "recorded", "source": "nse"})
         for sym, d, timing in self.conn.execute("SELECT symbol, date, timing FROM earnings WHERE date BETWEEN ? AND ?",
                                                 (str(start), str(end))):
             ed = date.fromisoformat(d)

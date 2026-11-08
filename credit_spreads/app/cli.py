@@ -274,10 +274,20 @@ def _cmd_backtest(args: argparse.Namespace) -> int:
 
     cfg = load_config(args.config)
     setup_logging(cfg.log_dir, level="WARNING" if not args.verbose else "INFO")
-    store = cfg.resolve(args.store)
-    universe = read_universe(Path(args.universe) if args.universe else runner.UNIVERSE_US)
+    nse = args.market == "nse"
+    store = cfg.resolve(args.store or (cfg.paths.market_store if nse else "data/market_us.db"))
+    if nse and not store.exists():
+        print(f"no recorded NSE data at {store} yet: it fills up from each 15:00 scan while `run` is going")
+        return 1
+    if args.universe:
+        universe = read_universe(Path(args.universe))
+    else:
+        universe = runner.store_universe(store) if nse else read_universe(runner.UNIVERSE_US)
     start, end = date.fromisoformat(args.start), date.fromisoformat(args.end)
     if args.action == "load":
+        if nse:
+            print("NSE data is recorded by the live system, not downloaded; `load` is for the US data only")
+            return 1
         from datetime import timedelta
 
         client = DoltHubClient()
@@ -287,15 +297,20 @@ def _cmd_backtest(args: argparse.Namespace) -> int:
                         progress=lambda i, n: print(f"  chain batches {i}/{n}", end="\r", flush=True))
         print(f"\nloaded {n:,} option quotes")
         return 0
-    bt_cfg = apply_overrides(runner.us_config(cfg, capital=args.capital), args.set)
+    base = runner.nse_config(cfg, args.capital) if nse else runner.us_config(cfg, capital=args.capital or 100_000)
+    bt_cfg = apply_overrides(base, args.set)
     days = runner.trading_days(store, start, end, symbols=list(universe))
     if len(days) <= args.warmup:
         print(f"only {len(days)} trading days with data in range; need more than the {args.warmup}-day warm-up")
         return 1
-    db = Path(args.db) if args.db else cfg.resolve("data/backtest_us.db")
+    db = Path(args.db) if args.db else cfg.resolve(f"data/backtest_{args.market}.db")
     ctx = runner.make_context(bt_cfg, store, db, days[0], universe, notice_days=args.notice_days)
-    print(f"Backtest: {len(universe)} US stocks, {days[0]} to {days[-1]} ({len(days)} days, first {args.warmup} "
-          f"warm-up), capital ${bt_cfg.capital:,.0f}" + (f", overrides {args.set}" if args.set else ""), flush=True)
+    from .fmt import inr, set_currency
+
+    set_currency(bt_cfg.market.currency)
+    print(f"Backtest: {len(universe)} {'NSE' if nse else 'US'} stocks, {days[0]} to {days[-1]} ({len(days)} days, "
+          f"first {args.warmup} warm-up), capital {inr(bt_cfg.capital)}" + (f", overrides {args.set}" if args.set else ""),
+          flush=True)
     run = runner.run_backtest(ctx, days, args.warmup,
                               progress=lambda i, n: print(f"  day {i}/{n}", end="\r", flush=True))
     print()
@@ -304,7 +319,7 @@ def _cmd_backtest(args: argparse.Namespace) -> int:
         from .reporting.weekly import write_report
 
         out = write_report(ctx, days[-1], days=(days[-1] - days[args.warmup]).days + 1,
-                           out_dir=cfg.resolve(cfg.reporting.out_dir), name=f"backtest_us_{days[-1]}")
+                           out_dir=cfg.resolve(cfg.reporting.out_dir), name=f"backtest_{args.market}_{days[-1]}")
         print(f"report: {out}")
     return 0
 
@@ -392,12 +407,14 @@ def build_parser() -> argparse.ArgumentParser:
     sp.set_defaults(func=_cmd_report)
 
     sp = sub.add_parser("backtest", help="replay real end-of-day US option data through the live code path")
-    sp.add_argument("action", choices=["load", "run"], help="load: download data from DoltHub; run: replay it")
+    sp.add_argument("action", choices=["load", "run"], help="load: download US data from DoltHub; run: replay")
+    sp.add_argument("--market", choices=["us", "nse"], default="us",
+                    help="us: DoltHub data; nse: quotes recorded by this system while paper trading")
     sp.add_argument("--start", default="2024-01-02")
     sp.add_argument("--end", default="2026-10-30")
     sp.add_argument("--warmup", type=int, default=130, help="days of scanning without entries (IV history)")
-    sp.add_argument("--capital", type=float, default=100_000, help="starting capital in dollars")
-    sp.add_argument("--store", default="data/market_us.db", help="local market data store")
+    sp.add_argument("--capital", type=float, default=None, help="starting capital (US default $100,000; NSE: config)")
+    sp.add_argument("--store", default=None, help="market store (default data/market_us.db or paths.market_store)")
     sp.add_argument("--universe", help="CSV of symbol,sector (default app/backtest/us_universe.csv)")
     sp.add_argument("--db", help="trading database for this run (default data/backtest_us.db)")
     sp.add_argument("--notice-days", type=int, default=14, help="days before an earnings date that it is known")

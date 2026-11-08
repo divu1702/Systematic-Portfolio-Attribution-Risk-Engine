@@ -453,6 +453,12 @@ def run_scan(ctx, persist: bool = True) -> ScanResult:
             c = SpreadCandidate(sym, "", 0, 0, None, None, 0, flags=_flags_upto(1, True))
             c.reject_reason = f"data: error {exc}"
             outcomes.append(StockOutcome(sym, "data", f"error: {exc}", rows=[c]))
+    try:
+        from ..data.market_recorder import record_scan_quotes
+
+        record_scan_quotes(ctx, ctx.cache.get("scan_quotes") or {})
+    except Exception as exc:                    # recording must never break a scan
+        log.warning("could not record scan quotes: %s", exc)
     ctx.cache.pop("scan_quotes", None)          # never reuse a scan's quotes later
     ranked = sorted([o.best for o in outcomes if o.best], key=lambda c: c.ev_ratio, reverse=True)
     selected = ranked[: cfg.scan.top_n]

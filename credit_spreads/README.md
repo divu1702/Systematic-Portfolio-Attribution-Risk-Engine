@@ -82,6 +82,20 @@ order-book size unknown (depth never binds), and legs that drop out of the day's
 priced with Black-76 at their last observed IV (counted in the summary). Universe and sectors:
 `app/backtest/us_universe.csv`.
 
+### Your own NSE history (recorded while paper trading)
+
+While `python -m app run` is going, every 15:00 scan saves the quotes it evaluated (real bid/ask,
+top-of-book and 5-level sizes, OI, volume, lot size and tick, futures prices) and the end-of-day job
+saves bars, sectors and the date each corporate event was first seen, into `data/market_nse.db`
+(`ops.record_market`, `paths.market_store`; roughly 1-2 MB a day). After a few months:
+
+```bash
+python -m app backtest run --market nse --warmup 30 --report
+```
+
+replays that history through the same code with your rupee capital and Zerodha costs. Unlike the US
+data, it carries real order-book depth, and events are visible exactly from the day they were first seen.
+
 ## First run on real data: checklist
 
 These could not be verified offline (the build machine has no access to Zerodha or NSE):

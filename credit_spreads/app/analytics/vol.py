@@ -30,16 +30,15 @@ def true_range(high: pd.Series, low: pd.Series, close: pd.Series) -> pd.Series:
 def atr(high: pd.Series, low: pd.Series, close: pd.Series, window: int = 14) -> pd.Series:
     """Wilder's ATR: seeded with the simple mean of the first `window` true ranges."""
     tr = true_range(high.astype(float), low.astype(float), close.astype(float))
-    out = pd.Series(np.nan, index=tr.index, dtype=float)
-    if len(tr) < window:
-        return out
-    vals = tr.to_numpy()
-    a = vals[:window].mean()
-    out.iloc[window - 1] = a
-    for i in range(window, len(vals)):
-        a = (a * (window - 1) + vals[i]) / window
-        out.iloc[i] = a
-    return out
+    vals = tr.to_numpy(dtype=float)
+    out = np.full(len(vals), np.nan)
+    if len(vals) >= window:
+        a = vals[:window].mean()
+        out[window - 1] = a
+        for i in range(window, len(vals)):          # plain numpy: pandas item assignment is ~100x slower
+            a = (a * (window - 1) + vals[i]) / window
+            out[i] = a
+    return pd.Series(out, index=tr.index)
 
 
 def percentile_rank(history: Iterable[float], value: float) -> Optional[float]:
@@ -50,11 +49,13 @@ def percentile_rank(history: Iterable[float], value: float) -> Optional[float]:
     return float((h < value).mean() * 100.0)
 
 
-def rolling_percentile_rank(series: pd.Series, window: int) -> pd.Series:
-    """For each point, its percentile rank within the trailing `window` values (inclusive)."""
+def rolling_percentile_rank(series: pd.Series, window: int, last_n: Optional[int] = None) -> pd.Series:
+    """For each point, its percentile rank within the trailing `window` values (inclusive).
+    With `last_n`, only the final last_n points are computed (the rest are NaN)."""
     vals = series.to_numpy(dtype=float)
     out = np.full(len(vals), np.nan)
-    for i in range(len(vals)):
+    first = 0 if last_n is None else max(0, len(vals) - last_n)
+    for i in range(first, len(vals)):
         if math.isnan(vals[i]):
             continue
         lo = max(0, i - window + 1)
