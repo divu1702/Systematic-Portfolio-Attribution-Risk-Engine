@@ -141,7 +141,9 @@ class KiteBroker(Broker):
         return out
 
     def historical(self, instrument_token: int, from_dt: datetime, to_dt: datetime,
-                   interval: str) -> List[dict]:
+                   interval: str, continuous: bool = False) -> List[dict]:
+        """`continuous=True` (futures, day candles only) stitches the same underlying's expired
+        futures onto the live contract; Kite serves no history for expired options."""
         self._require_session()
         span = timedelta(days=HIST_MAX_DAYS.get(interval, 60))
         candles: List[dict] = []
@@ -149,7 +151,7 @@ class KiteBroker(Broker):
         while start <= to_dt:
             end = min(start + span, to_dt)
             self._hist_rl.wait()
-            rows = self.kite.historical_data(instrument_token, start, end, interval, oi=True)
+            rows = self.kite.historical_data(instrument_token, start, end, interval, continuous=continuous, oi=True)
             for r in rows:
                 r["date"] = to_naive_ist(r["date"]) if isinstance(r["date"], datetime) else r["date"]
             candles.extend(rows)

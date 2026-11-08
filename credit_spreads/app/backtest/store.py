@@ -51,6 +51,21 @@ CREATE TABLE IF NOT EXISTS events_seen (          -- recorder only: when each ev
     PRIMARY KEY (symbol, event_date, event_type)
 );
 CREATE TABLE IF NOT EXISTS sectors (symbol TEXT PRIMARY KEY, sector TEXT);
+CREATE TABLE IF NOT EXISTS option_candles (       -- archiver: Kite daily candles per option contract
+    date TEXT NOT NULL, symbol TEXT NOT NULL, expiration TEXT NOT NULL, strike REAL NOT NULL, cp TEXT NOT NULL,
+    open REAL, high REAL, low REAL, close REAL, volume INTEGER, oi INTEGER, lot INTEGER,
+    PRIMARY KEY (date, symbol, expiration, strike, cp)
+);
+CREATE INDEX IF NOT EXISTS ix_option_candles_symbol ON option_candles (symbol, expiration);
+CREATE TABLE IF NOT EXISTS future_candles (       -- archiver: per expiry, or expiration = 'continuous'
+    date TEXT NOT NULL, symbol TEXT NOT NULL, expiration TEXT NOT NULL,
+    open REAL, high REAL, low REAL, close REAL, volume INTEGER, oi INTEGER,
+    PRIMARY KEY (date, symbol, expiration)
+);
+CREATE TABLE IF NOT EXISTS archive_log (          -- archiver: what has been fetched, for resuming
+    kind TEXT NOT NULL, key TEXT NOT NULL, archived_at TEXT NOT NULL, rows INTEGER NOT NULL,
+    PRIMARY KEY (kind, key)
+);
 """
 
 

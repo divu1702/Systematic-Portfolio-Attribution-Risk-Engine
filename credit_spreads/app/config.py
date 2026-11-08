@@ -243,12 +243,13 @@ class ScheduleCfg(_Section):
     scan: str = "15:00"
     thesis_exit: str = "15:15"
     eod: str = "15:35"
+    archive: str = "16:10"
     monitor_every_min: PosInt = 5
     no_entry_start: str = "09:15"
     no_entry_end: str = "09:20"
 
     @field_validator("instruments_refresh", "events_fetch", "login_reminder", "gap_check",
-                     "scan", "thesis_exit", "eod",
+                     "scan", "thesis_exit", "eod", "archive",
                      "no_entry_start", "no_entry_end")
     @classmethod
     def _hhmm(cls, v: str) -> str:
@@ -299,6 +300,16 @@ class OpsCfg(_Section):
     record_market: bool = True          # save each scan's quotes to paths.market_store for backtests
 
 
+class ArchiveCfg(_Section):
+    """Kite history archiver (app/data/history_archiver.py)."""
+    enabled: bool = True
+    band: Annotated[float, Field(gt=0, le=1)] = 0.25       # option strikes within +-25% of the stock price
+    max_expiries: PosInt = 3                                # listed monthly series to backfill
+    days_before_expiry: PosInt = 3                          # top up a series in its last N trading days
+    max_requests_per_run: PosInt = 5000                     # ~28 minutes at Kite's 3 requests a second
+    equity_days: Annotated[int, Field(ge=30, le=2000)] = 2000
+
+
 class PathsCfg(_Section):
     db: str = "data/trading.db"
     logs: str = "logs"
@@ -339,6 +350,7 @@ class Config(_Section):
     killswitch: KillSwitchCfg = KillSwitchCfg()
     costs: CostsCfg = CostsCfg()
     market: MarketCfg = MarketCfg()
+    archive: ArchiveCfg = ArchiveCfg()
     ops: OpsCfg = OpsCfg()
     paths: PathsCfg = PathsCfg()
 

@@ -326,6 +326,23 @@ def _cmd_backtest(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_archive(args: argparse.Namespace) -> int:
+    from .data.history_archiver import archive_status, run_archive
+
+    ctx = _ctx(args)
+    if args.status:
+        print(archive_status(ctx))
+        return 0
+    if not ctx.broker.session_valid():
+        print("No Kite session today: run `python -m app login` first.")
+        return 1
+    print("Archiving Kite history (resumable: Ctrl+C is safe, run again to continue) ...", flush=True)
+    rep = run_archive(ctx, budget=args.budget, progress=lambda s: print("  " + s, flush=True))
+    print(rep.text())
+    print(archive_status(ctx))
+    return 0
+
+
 def _cmd_record(args: argparse.Namespace) -> int:
     from .recorder import record_fixtures
 
@@ -424,6 +441,11 @@ def build_parser() -> argparse.ArgumentParser:
                     help="override a threshold for this run, e.g. --set iv.min_iv_hv_ratio=1.15")
     sp.add_argument("--report", action="store_true", help="write an HTML report for the trading period")
     sp.set_defaults(func=_cmd_backtest)
+
+    sp = sub.add_parser("archive", help="save Kite option, futures and stock history before it disappears")
+    sp.add_argument("--budget", type=int, default=10**9, help="maximum broker calls this run (default: no limit)")
+    sp.add_argument("--status", action="store_true", help="show what has been archived")
+    sp.set_defaults(func=_cmd_archive, mock=False)
 
     sp = sub.add_parser("record", help="save real Kite responses as offline test fixtures")
     sp.add_argument("symbols", nargs="+")

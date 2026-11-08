@@ -81,7 +81,8 @@ class MockBroker(Broker):
         return out
 
     def historical(self, instrument_token: int, from_dt: datetime, to_dt: datetime,
-                   interval: str) -> List[dict]:
+                   interval: str, continuous: bool = False) -> List[dict]:
+        self.hist_calls = getattr(self, "hist_calls", 0) + 1
         return self.market.candles(instrument_token, from_dt, to_dt, interval, self.clock.now())
 
     def basket_margin(self, orders: List[dict]) -> float:

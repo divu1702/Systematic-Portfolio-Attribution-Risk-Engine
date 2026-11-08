@@ -99,6 +99,7 @@ schedule:                                             # + all times IST
   scan: "15:00"
   thesis_exit: "15:15"
   eod: "15:35"
+  archive: "16:10"           # + Kite history archiver (see archive section)
   monitor_every_min: 5
   no_entry_start: "09:15"
   no_entry_end: "09:20"
@@ -112,6 +113,13 @@ costs:                 # update when broker or exchange rates change
   sebi_fee_per_crore: 10
   stamp_buy_pct: 0.00003
   gst: 0.18
+archive:                     # + save Kite option history before it disappears (no history for expired options)
+  enabled: true
+  band: 0.25                 # strikes within +-25% of the stock price
+  max_expiries: 3
+  days_before_expiry: 3      # top up each monthly series in its last 3 trading days
+  max_requests_per_run: 5000 # ~28 minutes a night at 3 requests a second
+  equity_days: 2000
 ops: {backup_keep: 14, heartbeat: true, record_market: true}   # + backups; EOD alert; record quotes for backtests
 market: {name: nse, currency: INR}                    # + backtests on other markets override this
 paths:                                                # + relative to this file's folder

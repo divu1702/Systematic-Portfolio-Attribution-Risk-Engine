@@ -92,7 +92,18 @@ def job_specs(ctx) -> List[Tuple[str, Dict, Callable, bool]]:
         ("eod", hm(s.eod), lambda: eod_job(ctx), True),
         ("weekly_report", {**hm(ctx.cfg.reporting.weekly_time), "day_of_week": ctx.cfg.reporting.weekly_day},
          lambda: weekly_report_job(ctx), False),
+        ("archive", hm(s.archive), lambda: archive_job(ctx), True),
     ]
+
+
+def archive_job(ctx):
+    """Nightly Kite history archiving within the request budget (see app/data/history_archiver.py)."""
+    from .data.history_archiver import run_archive
+
+    rep = run_archive(ctx)
+    if rep.expiring or (rep.requests and not rep.pending):
+        ctx.notifier.send(rep.text(), "info")
+    return rep
 
 
 def weekly_report_job(ctx):

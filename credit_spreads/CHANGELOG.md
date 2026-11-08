@@ -16,6 +16,12 @@ setting away.
   Prevents wide quotes alone from stopping trades out. The path-simulated EV uses the same rule.
 - Optional cap on contracts per spread (`risk.max_lots_per_trade`, off by default).
 
+### Indian data collection
+- Kite history archiver (`python -m app archive`, nightly at 16:10 within `archive.max_requests_per_run`):
+  backfills daily candles for listed stock options within +-25% of the price, every listed futures
+  contract, continuous futures and up to 2,000 days of stock bars, then tops up each monthly series in its
+  last 3 trading days before Kite drops it. Resumable; respects Kite's rate limit.
+
 ### Real-data backtest and architecture (8 Nov 2026)
 - `python -m app backtest load|run`: DoltHub US end-of-day option quotes, earnings and splits replayed
   through the live code path (HistoricalBroker, HistoricalExchange, runner); `--set` overrides for

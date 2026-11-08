@@ -234,3 +234,58 @@ def test_live_recorder_builds_a_replayable_nse_store(mock_ctx, tmp_path):
     assert "NSE quotes recorded" in ctx.banner
     from app.fmt import set_currency
     set_currency("INR")
+
+
+# ----------------------------------------------------------------------------- Kite history archiver
+
+@pytest.fixture
+def archive_ctx(mock_ctx):
+    mock_ctx.cache["archive_on_mock"] = True
+    mock_ctx.cfg = mock_ctx.cfg.model_copy(update={"archive": mock_ctx.cfg.archive.model_copy(
+        update={"band": 0.04, "max_expiries": 1, "equity_days": 120})})
+    return mock_ctx
+
+
+def test_archiver_backfills_and_resumes(archive_ctx):
+    from app.data.history_archiver import archive_status, run_archive
+
+    ctx = archive_ctx
+    first = run_archive(ctx, budget=10)
+    assert first.requests == 10 and first.pending > 0              # budget respected, work left over
+    total = first
+    for _ in range(30):
+        rep = run_archive(ctx, budget=50)
+        if rep.requests == 0:
+            break
+    assert rep.requests == 0 and rep.pending == 0                   # everything archived, nothing re-fetched
+    store = sqlite3.connect(ctx.cfg.resolve(ctx.cfg.paths.market_store))
+    n_opt, n_sym = store.execute("SELECT COUNT(*), COUNT(DISTINCT symbol) FROM option_candles").fetchone()
+    n_cont = store.execute("SELECT COUNT(*) FROM future_candles WHERE expiration='continuous'").fetchone()[0]
+    n_bars = store.execute("SELECT COUNT(DISTINCT symbol) FROM bars").fetchone()[0]
+    lots = {r[0] for r in store.execute("SELECT DISTINCT lot FROM option_candles WHERE symbol='STK01'")}
+    store.close()
+    assert n_opt > 0 and n_sym == 8 and n_cont > 0 and n_bars == 8
+    assert lots == {ctx.broker.market.spec("STK01").lot}
+    assert "option candles" in archive_status(ctx)
+
+
+def test_archiver_tops_up_expiring_series(archive_ctx):
+    from datetime import datetime, time
+    from app.data.history_archiver import run_archive
+
+    ctx = archive_ctx
+    run_archive(ctx, budget=10**6)                                  # backfill everything
+    expiry = date(2026, 11, 24)
+    ctx.clock.set(datetime.combine(expiry - timedelta(days=1), time(16, 10)))   # last trading days
+    rep = run_archive(ctx, budget=10**6)
+    assert rep.options > 0 and rep.expiring == [str(expiry)]
+    assert run_archive(ctx, budget=10**6).options == 0              # topped up once only
+
+
+def test_archiver_off_for_mock_and_when_disabled(mock_ctx):
+    from app.data.history_archiver import run_archive
+
+    assert run_archive(mock_ctx).requests == 0                      # mock without the test flag
+    mock_ctx.cache["archive_on_mock"] = True
+    mock_ctx.cfg = mock_ctx.cfg.model_copy(update={"archive": mock_ctx.cfg.archive.model_copy(update={"enabled": False})})
+    assert run_archive(mock_ctx).requests == 0
