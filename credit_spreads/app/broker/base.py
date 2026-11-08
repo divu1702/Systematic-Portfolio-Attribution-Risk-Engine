@@ -127,8 +127,9 @@ class Broker(ABC):
 
     @abstractmethod
     def historical(self, instrument_token: int, from_dt: datetime, to_dt: datetime,
-                   interval: str) -> List[dict]:
-        """Candles as dicts: date (naive IST datetime), open, high, low, close, volume[, oi]."""
+                   interval: str, continuous: bool = False) -> List[dict]:
+        """Candles as dicts: date (naive IST datetime), open, high, low, close, volume[, oi].
+        `continuous` asks for a futures series stitched across expiries (ignored where unsupported)."""
 
     # --- account
     @abstractmethod

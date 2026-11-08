@@ -53,14 +53,15 @@ is meant to ensure.
 
 ## Decisions for the owner
 
-1. **F8.** Lower the floor to a sanity level (for example 15%) and let the path EV judge credit
-   quality, or keep 25% and accept very few trades.
+1. **F8.** *Done 8 Nov 2026:* replaced by a friction test (credit at least 3x the bid-ask cost of
+   closing, at least 5 ticks; `spread.f8_mode`), with the spec's 25% rule one setting away.
 2. **Which strategy fixes to test next** (each as a config option, judged on the first half of the
    data and confirmed on the second half, per the tuning rule):
-   - *Minimum credit versus the bid-ask:* require the net credit to be at least 2x the two legs'
+   - *Minimum credit versus the bid-ask (done: F8 friction mode, plus `risk.max_lots_per_trade`):*
+     require the net credit to be at least 2x the two legs'
      combined bid-ask, plus a minimum in ticks, and cap contracts per trade. Removes noise-driven stops
      and oversized positions on tiny credits.
-   - *Stops on the mid price:* trigger the hard stop on the mid-price cost to close and fill at natural
+   - *Stops on the mid price (done: `exit.stop_price: mid`, the default):* trigger the hard stop on the mid-price cost to close and fill at natural
      prices when it fires, so a wide quote alone cannot stop a trade out.
    - *Profit target:* 50% halves the modelled edge; test 65-75% or holding to the time stop.
    - *A forward-looking volatility forecast for F3:* after a large move realised volatility tends to
@@ -108,3 +109,8 @@ is meant to ensure.
 - Honest NSE client with browser-export event imports.
 - Config hash on every candidate and trade; daily database backup; end-of-day heartbeat.
 - Market profiles (currency) and a per-contract cost model.
+- Market-independent fixes from the research review: F8 friction test, mid-price hard stop, optional
+  lot cap (all config options).
+- Kite history archiver: nightly saving of listed option and futures candles before expiry, plus a
+  one-off backfill (`python -m app archive`).
+- Research study ported to Indian data (`--market nse`), ready to run as the archive grows.

@@ -130,7 +130,7 @@ class FixtureBroker(Broker):
         return {k: q[k] for k in keys if k in q}
 
     def historical(self, instrument_token: int, from_dt: datetime, to_dt: datetime,
-                   interval: str) -> List[dict]:
+                   interval: str, continuous: bool = False) -> List[dict]:
         path = self.dir / "historical" / f"{instrument_token}_{interval}.json"
         if not path.exists():
             return []

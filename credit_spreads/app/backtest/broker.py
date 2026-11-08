@@ -287,7 +287,8 @@ class HistoricalBroker(Broker):
                     out[key] = q
         return out
 
-    def historical(self, instrument_token: int, from_dt: datetime, to_dt: datetime, interval: str) -> List[dict]:
+    def historical(self, instrument_token: int, from_dt: datetime, to_dt: datetime, interval: str,
+                   continuous: bool = False) -> List[dict]:
         if interval != "day":
             return []
         sym = next((s for s in self.symbols if _token("EQ", s) == instrument_token), None)

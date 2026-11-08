@@ -21,6 +21,13 @@ setting away.
   backfills daily candles for listed stock options within +-25% of the price, every listed futures
   contract, continuous futures and up to 2,000 days of stock bars, then tops up each monthly series in its
   last 3 trading days before Kite drops it. Resumable; respects Kite's rate limit.
+- The research study runs on Indian data (`research/option_selling_study.py --market nse`): IV and delta
+  from daily option closes against the same expiry's futures (vectorised Black-76), bid/ask from recorded
+  quotes or from spreads learnt from them, results dates as first seen, and windows across bonus, split,
+  rights or demerger dates left out.
+- Study fix (both markets): holding windows whose expiry lies after the last stored close are left out;
+  they had been settled at the last close. US figures in `research/results_us.md` and
+  `research/strategy_review.md` refreshed (about 2% of rows; no conclusion changed).
 
 ### Real-data backtest and architecture (8 Nov 2026)
 - `python -m app backtest load|run`: DoltHub US end-of-day option quotes, earnings and splits replayed

@@ -1,8 +1,13 @@
 """Empirical study: where does selling single-stock options pay, and do our filters find it?
 
-Uses the DoltHub US market store (data/market_us.db, built by `python -m app backtest load`):
-real end-of-day bid/ask/IV/delta for ~25 strikes x the expiries <= 40 days out, daily bars,
-earnings dates and splits, 48 liquid stocks, Jan 2024 - Oct 2026.
+Two data sources, same analyses:
+- `--market us` (default): the DoltHub US store (data/market_us.db, `python -m app backtest load`):
+  real end-of-day bid/ask/IV/delta, daily bars, earnings dates and splits.
+- `--market nse`: the Indian store built by this system (data/market_nse.db): Kite daily candles
+  saved by the history archiver, quotes saved by the live recorder, and results dates as first seen.
+  IV and delta are computed from each option's close with the same expiry's futures close as the
+  forward (Black-76). Bid/ask comes from recorded quotes where available, otherwise an assumed
+  spread (`--assume-spread`, as a fraction of the price), reported in the output.
 
 Not a strategy backtest. It measures, held to expiry with no exit rules:
   A. implied vs subsequently realised volatility (the volatility risk premium), by condition
@@ -11,7 +16,7 @@ Not a strategy backtest. It measures, held to expiry with no exit rules:
   D. earnings inside vs outside the holding window
   E. whether support/resistance levels from our level engine hold better than chance
 
-Usage: python research/option_selling_study.py [path/to/market_us.db] > research/results.md
+Usage: python research/option_selling_study.py [--market us|nse] [--db PATH] > research/results_<market>.md
 Statistics: per-expiry averages, t-statistics with Newey-West (4 lags) across expiries, because
 overlapping holding periods make individual trades far from independent.
 """
@@ -21,7 +26,6 @@ from __future__ import annotations
 import math
 import sqlite3
 import sys
-from datetime import date
 from pathlib import Path
 
 import numpy as np
@@ -31,7 +35,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from app.analytics.levels import compute_levels  # noqa: E402
 
-DB = Path(sys.argv[1]) if len(sys.argv) > 1 else ROOT / "data" / "market_us.db"
+DB = ROOT / "data" / "market_us.db"
 SHOCK_ATR, SHOCK_LOOKBACK = 1.5, 10            # F5 defaults
 MIN_DTE, MAX_DTE, TARGET_DTE = 15, 35, 28        # strategy's DTE window
 LEVEL_HORIZON = 15                               # trading days, roughly a holding period
@@ -79,6 +83,133 @@ def by_expiry_stats(df: pd.DataFrame, col: str) -> dict:
 
 
 # ----------------------------------------------------------------------------- data
+
+def _b76(F, K, T, sigma, r, is_call):
+    """Black-76 price and delta, vectorised; puts by put-call parity."""
+    from scipy.special import ndtr
+
+    sv = sigma * np.sqrt(T)
+    d1 = (np.log(F / K) + 0.5 * sv * sv) / sv
+    df = np.exp(-r * T)
+    call = df * (F * ndtr(d1) - K * ndtr(d1 - sv))
+    price = np.where(is_call, call, call - df * (F - K))
+    delta = df * np.where(is_call, ndtr(d1), ndtr(d1) - 1.0)
+    return price, delta
+
+
+def implied_vol_vec(px, F, K, T, r, is_call, lo=0.01, hi=5.0, iters=50):
+    """Vectorised Black-76 implied vol by bisection; NaN where no vol in [lo, hi] fits the price."""
+    px, F, K, T = (np.asarray(x, float) for x in (px, F, K, T))
+    is_call = np.asarray(is_call, bool)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        df = np.exp(-r * T)
+        intrinsic = df * np.where(is_call, np.maximum(F - K, 0), np.maximum(K - F, 0))
+        ok = (px > intrinsic) & (px < df * np.where(is_call, F, K)) & (T > 0) & (F > 0) & (K > 0)
+        Ts, Fs = np.where(ok, T, 1.0), np.where(ok, F, 1.0)
+        Ks = np.where(ok, K, 1.0)
+        a, b = np.full(px.shape, lo), np.full(px.shape, hi)
+        for _ in range(iters):
+            m = 0.5 * (a + b)
+            high = _b76(Fs, Ks, Ts, m, r, is_call)[0] > px
+            a, b = np.where(high, a, m), np.where(high, m, b)
+        ok &= _b76(Fs, Ks, Ts, np.full(px.shape, hi), r, is_call)[0] >= px
+    iv = 0.5 * (a + b)
+    iv[~ok] = np.nan
+    return iv
+
+
+def _with_iv(df: pd.DataFrame, price, F, r: float) -> pd.DataFrame:
+    if df.empty:
+        return df.assign(iv=pd.Series(dtype=float), delta=pd.Series(dtype=float))
+    T = (df.expiration - df.date).dt.days.values / 365.0
+    K, F, price = df.strike.values.astype(float), np.asarray(F, float), np.asarray(price, float)
+    is_call = (df.cp == "CE").values
+    iv = implied_vol_vec(price, F, K, T, r, is_call)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        _, delta = _b76(F, K, np.where(T > 0, T, 1e-6), np.nan_to_num(iv, nan=0.3), r, is_call)
+    return df.assign(iv=iv, delta=np.where(np.isnan(iv), np.nan, delta))
+
+
+DBINS = [0.0, 0.10, 0.20, 0.30, 0.40, 0.60, 1.01]
+CAPITAL_EVENTS = ("bonus", "split", "rights", "demerger")
+
+
+def load_nse(db: Path, assume_spread: float = 0.04, r: float = 0.065, tick: float = 0.05, min_obs: int = 20):
+    """The Indian store in the same shapes as load(): bars, chains, earnings, splits, plus a note.
+
+    Option rows come from two writers. Recorded 15:00 quotes (real bid/ask) are used as they are.
+    Archived daily candles fill the other days, priced at the day's close (the last trade, so thin
+    strikes can be stale; only days with volume are kept). Their bid/ask is the close +- half the
+    median relative spread recorded for that stock and delta bucket (at least `min_obs` quotes),
+    else for that delta bucket across stocks, else `assume_spread`. The forward is the same expiry's
+    futures: candle close for candle rows, recorded quote for quote rows, else spot * e^(rT).
+    """
+    from app.data.events import RESULTS_TYPES
+
+    conn = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+
+    def q(sql, dates):
+        df = pd.read_sql_query(sql, conn)
+        for c in dates:                       # also types the columns of an empty result
+            df[c] = pd.to_datetime(df[c])
+        return df
+    keys = ["date", "symbol", "expiration", "strike", "cp"]
+    bars = q("SELECT symbol, date, open, high, low, close FROM bars", ["date"])
+    oc = q("SELECT date, symbol, expiration, strike, cp, close AS px FROM option_candles WHERE volume > 0 "
+           "AND close > 0", ["date", "expiration"])
+    rec = q("SELECT date, symbol, expiration, strike, cp, bid, ask FROM chains WHERE bid > 0 AND ask > bid",
+            ["date", "expiration"])
+    fc = q("SELECT date, symbol, expiration, close AS fwd FROM future_candles WHERE expiration != 'continuous' "
+           "AND close > 0", ["date", "expiration"])
+    fq = q("SELECT date, symbol, expiration, CASE WHEN bid > 0 AND ask > 0 THEN (bid + ask) / 2 ELSE last END "
+           "AS fwd FROM futures", ["date", "expiration"])
+    ev = q("SELECT symbol, event_date AS date, event_type FROM events_seen", ["date"])
+    conn.close()
+    spot = bars[["symbol", "date", "close"]].rename(columns={"close": "spot"})
+
+    def forward(df, fut):
+        df = df.merge(fut, on=["date", "symbol", "expiration"], how="left").merge(spot, on=["symbol", "date"],
+                                                                                  how="left")
+        T = (df.expiration - df.date).dt.days.values / 365.0
+        return df, np.where(df.fwd.notna(), df.fwd, df.spot * np.exp(r * T))
+
+    rec, F = forward(rec, fq)
+    rec = _with_iv(rec, ((rec.bid + rec.ask) / 2).values, F, r)
+    rec["rel"] = (rec.ask - rec.bid) / ((rec.ask + rec.bid) / 2)
+    rec["dbin"] = pd.cut(rec.delta.abs(), DBINS, right=False, labels=False)
+    oc = oc.merge(rec[keys], on=keys, how="left", indicator=True)
+    oc = oc[oc._merge == "left_only"].drop(columns="_merge")
+    oc, F = forward(oc, fc)
+    oc = _with_iv(oc, oc.px.values, F, r)
+    oc["dbin"] = pd.cut(oc.delta.abs(), DBINS, right=False, labels=False)
+    by_sym = rec.groupby(["symbol", "dbin"]).rel.agg(["median", "size"])
+    by_sym = by_sym[by_sym["size"] >= min_obs]["median"].rename("rel_sym").reset_index()
+    by_bin = rec.groupby("dbin").rel.agg(["median", "size"])
+    by_bin = by_bin[by_bin["size"] >= min_obs]["median"].rename("rel_bin").reset_index()
+    oc = oc.merge(by_sym, on=["symbol", "dbin"], how="left").merge(by_bin, on="dbin", how="left")
+    rel = oc.rel_sym.fillna(oc.rel_bin).fillna(assume_spread).values
+    half = np.maximum(rel * oc.px.values / 2, tick / 2)
+    oc["bid"], oc["ask"] = np.maximum(oc.px.values - half, 0.0), oc.px.values + half
+    cols = keys + ["bid", "ask", "iv", "delta"]
+    chains = pd.concat([rec[cols], oc[cols]], ignore_index=True) if len(oc) else rec[cols].copy()
+    chains = chains.dropna(subset=["iv"]).reset_index(drop=True)
+    earn = ev[ev.event_type.isin(RESULTS_TYPES)].assign(timing=None)[["symbol", "date", "timing"]].drop_duplicates()
+    # Capital changes adjust NSE contracts and break the price series; the factor is not stored, so
+    # these dates only exclude the windows across them (factor 1 = no price adjustment).
+    cap = ev.loc[ev.event_type.isin(CAPITAL_EVENTS), ["symbol", "date"]]
+    b = bars.sort_values(["symbol", "date"])
+    jump = b.close / b.groupby("symbol").close.shift(1)
+    cap = pd.concat([cap, b.loc[(jump < 0.6) | (jump > 1.67), ["symbol", "date"]]])
+    splits = cap.rename(columns={"date": "ex_date"}).drop_duplicates().assign(to_factor=1.0, for_factor=1.0)
+    n_sym, n_bin = int(oc.rel_sym.notna().sum()), int((oc.rel_sym.isna() & oc.rel_bin.notna()).sum())
+    note = (f"Indian data: {len(rec):,} recorded quotes (real bid/ask) and {len(oc):,} candle closes; candle "
+            f"spreads from recorded quotes of the same stock for {n_sym:,}, of all stocks for {n_bin:,}, assumed "
+            f"{assume_spread:.0%} of the price for {len(oc) - n_sym - n_bin:,}. Rows without a valid IV are "
+            f"dropped, leaving {len(chains):,}. Results dates as recorded: {len(earn):,}. Windows across "
+            f"{len(splits):,} capital changes (bonus, split, rights, demerger, or a one-day jump over 40%) "
+            f"are excluded.")
+    return bars, chains, earn, splits, note
+
 
 def load(db: Path):
     conn = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
@@ -172,7 +303,9 @@ def atm_panel(chains: pd.DataFrame, feat: pd.DataFrame, earn: pd.DataFrame, spli
         lambda s: s.rolling(120, min_periods=60).apply(lambda x: (x[:-1] < x[-1]).mean() * 100, raw=True))
     atm["iv_over_rv"] = atm.atm_iv / atm.rv_fwd
     atm["vrp_var"] = atm.atm_iv ** 2 - atm.rv_fwd ** 2
-    return atm[~atm.split_in_window & atm.rv_fwd.notna()]
+    last_bar = feat.groupby("symbol").date.max()
+    done = atm.expiration.values <= atm.symbol.map(last_bar).values      # held to expiry: window complete
+    return atm[done & ~atm.split_in_window & atm.rv_fwd.notna()]
 
 
 def bucket_iv_hv(x):
@@ -375,21 +508,69 @@ def levels_test(feat: pd.DataFrame, step: int = 2) -> str:
 
 # ----------------------------------------------------------------------------- main
 
-def main() -> None:
-    bars, chains, earn, splits = load(DB)
+def main(argv=None) -> None:
+    import argparse
+
+    ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    ap.add_argument("--market", choices=["us", "nse"], default="us")
+    ap.add_argument("--db", type=Path, default=None)
+    ap.add_argument("--assume-spread", type=float, default=0.04,
+                    help="NSE only: bid-ask as a fraction of price where no quote was recorded")
+    ap.add_argument("--levels-step", type=int, default=2, help="evaluate levels every Nth day (speed)")
+    ap.add_argument("--risk-free", type=float, default=0.065, help="NSE only: rate for Black-76 (as config.yaml)")
+    args = ap.parse_args(argv)
+    if args.market == "nse":
+        db = args.db or ROOT / "data" / "market_nse.db"
+        bars, chains, earn, splits, notes = load_nse(db, args.assume_spread, args.risk_free)
+        title = "Option-selling study on Indian data (NSE, recorded by this system)"
+    else:
+        db = args.db or DB
+        bars, chains, earn, splits = load(db)
+        notes = "US data from DoltHub: real end-of-day bid/ask."
+        title = "Option-selling study on real US data"
+    if chains.empty:
+        print(f"# {title}\n\nNo option data in {db} yet.")
+        return
     feat = underlying_features(bars, splits)
     atm = atm_panel(chains, feat, earn, splits)
-    print(f"# Option-selling study on real US data\n\nSource: {DB.name}; {chains.symbol.nunique()} stocks, "
+    print(f"# {title}\n\nSource: {db.name}; {chains.symbol.nunique()} stocks, "
           f"{chains.date.min():%Y-%m-%d} to {chains.date.max():%Y-%m-%d}; {len(chains):,} option quotes. "
-          f"Held to expiry, no exit rules. Expiries {MIN_DTE}-{MAX_DTE} days out at entry.\n")
+          f"Held to expiry, no exit rules. Expiries {MIN_DTE}-{MAX_DTE} days out at entry. {notes}\n")
+    n_exp = atm.expiration.nunique()
+    print(f"Completed expiries in the sample: {n_exp}. t-statistics need at least 8 (shown as n/a below that); "
+          f"treat anything under ~24 as anecdotal.\n")
+    if atm.empty:
+        print("No completed holding windows yet: an option enters the study once its expiry has passed and "
+              "the stock's close on that day is stored.")
+        return
     print("## A. Implied vs subsequently realised volatility (ATM, ~28 days)\n")
     print(vrp_tables(atm), "\n")
     opts = option_returns(chains, feat, atm)
+    if opts.empty:
+        print("No tradeable option quotes (|delta| 0.05-0.55, spread under half the price) in completed windows.")
+        return
     print("## B. Selling one option, held to expiry (no earnings in the window)\n")
     print("P&L per share as % of the stock price; t (NW) uses per-expiry means.\n")
     print(option_tables(opts), "\n")
     v = verticals(opts)
     print("## C. 1-strike vertical spreads, short leg at |delta| 0.20-0.30, held to expiry\n")
+    if v.empty:
+        print("No spreads in completed windows yet.\n")
+    else:
+        section_c(opts, v)
+    print("## D. Single 0.15-0.35 delta options by condition (P&L at mid, % of spot)\n")
+    core = opts[(opts.adelta >= 0.15) & (opts.adelta < 0.35)]
+    for cp in ("PE", "CE"):
+        print(f"### Short {'puts' if cp == 'PE' else 'calls'}\n")
+        print(table(condition_rows(core[core.cp == cp], "pnl_mid_pct_spot")), "\n")
+    print("## E. Do support/resistance levels hold?\n")
+    if feat.groupby("symbol").size().max() > 260 + LEVEL_HORIZON:
+        print(levels_test(feat, step=args.levels_step), "\n")
+    else:
+        print("Needs more than a year of daily bars per stock.\n")
+
+
+def section_c(opts: pd.DataFrame, v: pd.DataFrame) -> None:
     print(f"Median credit/width at mid {v.credit_mid_w.median():.2f}, at natural prices {v.credit_nat_w.median():.2f}; "
           f"share with natural credit/width >= 0.25: {(v.credit_nat_w >= 0.25).mean():.1%}.\n")
     for cp in ("PE", "CE"):
@@ -404,6 +585,8 @@ def main() -> None:
                       ("wing ~6% of spot", verticals(opts, 6.0)),
                       ("0.15-0.20 delta short, wing ~6%", verticals(opts, 6.0, (0.15, 0.20)))):
         for cp in ("PE", "CE"):
+            if vv.empty:
+                break
             sub = vv[(vv.cp == cp) & ~vv.earn_in_window]
             if len(sub) < 30:
                 continue
@@ -413,14 +596,7 @@ def main() -> None:
                          "median credit/width natural": sub.credit_nat_w.median(), "win rate": sub.win.mean(),
                          "P&L/width at mid": m["mean"], "t mid": m["t"], "P&L/width at natural": n["mean"],
                          "t natural": n["t"]})
-    print(table(pd.DataFrame(rows)), "\n")
-    print("## D. Single 0.15-0.35 delta options by condition (P&L at mid, % of spot)\n")
-    core = opts[(opts.adelta >= 0.15) & (opts.adelta < 0.35)]
-    for cp in ("PE", "CE"):
-        print(f"### Short {'puts' if cp == 'PE' else 'calls'}\n")
-        print(table(condition_rows(core[core.cp == cp], "pnl_mid_pct_spot")), "\n")
-    print("## E. Do support/resistance levels hold?\n")
-    print(levels_test(feat), "\n")
+    print(table(pd.DataFrame(rows)) if rows else "Not enough spreads per side yet.", "\n")
 
 
 if __name__ == "__main__":

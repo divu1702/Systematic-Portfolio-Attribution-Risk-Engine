@@ -82,7 +82,7 @@ eligibility, with open contracts allowed to run to expiry ([Kotak summary](https
 
 ## 2. What our data says (US, Jan 2024 - Oct 2026, held to expiry)
 
-**A. Implied vs subsequently realised volatility** (ATM, ~28 days). Median IV/RV 1.08: a premium, but
+**A. Implied vs subsequently realised volatility** (ATM, ~28 days). Median IV/RV 1.09: a premium, but
 small. Windows containing earnings: 1.14. Without earnings, by our filters:
 
 | Condition | Median IV / later RV | IV above later RV |
@@ -90,12 +90,12 @@ small. Windows containing earnings: 1.14. Without earnings, by our filters:
 | IV/HV20 below 1.00 | 1.06 | 59% |
 | IV/HV20 at or above 1.25 (F3) | 1.07 | 61% |
 | IV percentile at or above 70 (F4) | **1.10** | **64%** |
-| Large move in the last 10 days (F5) | 1.07 | 60% |
+| Large move in the last 10 days (F5) | 1.06 | 60% |
 
 F3 and F5 pick days no richer than any other; F4 picks somewhat richer ones.
 
 **B. Selling a single option** (no earnings in the window, P&L as % of the stock price per cycle):
-short puts made +0.2% to +0.7% (t about 2), short calls lost 0.2% to 0.8% (t about -2.5). This was a
+short puts made +0.2% to +0.6% (t about 2), short calls lost 0.2% to 0.8% (t about -2.5). This was a
 strong bull market, so the put/call split mostly reflects the trend, not option pricing.
 
 **C. Our structure: vertical spreads, short leg 0.20-0.30 delta.** Median credit/width 0.19 at mid and
@@ -103,9 +103,9 @@ strong bull market, so the put/call split mostly reflects the trend, not option 
 
 | Wing (no earnings in window) | Bull put, P&L/width at natural | Bear call, P&L/width at natural |
 |---|---|---|
-| Next listed strike (~2% of spot) | -6% (t -2.6) | -12% (t -6.9) |
-| ~3% of spot | -3% (t -1.7) | -10% (t -6.0) |
-| ~6% of spot | **-0.7% (t -0.4)** | -7% (t -4.2) |
+| Next listed strike (~2% of spot) | -6% (t -2.6) | -12% (t -6.8) |
+| ~3% of spot | -4% (t -1.7) | -10% (t -5.9) |
+| ~6% of spot | **-0.9% (t -0.5)** | -7% (t -4.3) |
 
 At mid prices bull puts made about +2% of width; the bid-ask turns that into a loss for narrow wings.
 Wider wings roughly halve or remove the drag.
@@ -114,13 +114,13 @@ Wider wings roughly halve or remove the drag.
 
 | Condition | Mean | t |
 |---|---|---|
-| All | +0.32 | 2.1 |
-| IV percentile at or above 70 | **+0.79** | **4.1** |
+| All | +0.30 | 1.9 |
+| IV percentile at or above 70 | **+0.78** | **4.0** |
 | F3 and F4 *without* a recent shock | +0.61 | 2.3 |
-| F3 and F4 *with* a recent shock (our setup) | +0.03 | 0.1 |
-| Earnings inside the window | +0.10 | 0.3 |
+| F3 and F4 *with* a recent shock (our setup) | +0.03 | 0.05 |
+| Earnings inside the window | +0.12 | 0.4 |
 
-For calls, IV percentile at or above 70 lifted results from -0.47 to +0.03. Holding through earnings
+For calls, IV percentile at or above 70 lifted results from -0.50 to +0.01. Holding through earnings
 paid less, despite the higher IV, so avoiding results (F2) is supported for out-of-the-money selling.
 
 **E. Support/resistance.** For a support within 1.5 ATR below the price, the close reached the level
@@ -131,6 +131,8 @@ Resistance: the same. Our levels carried no measurable information.
 **Caveats.** US market, not NSE; one strongly rising market; end-of-day quotes, wider than intraday
 ones, so natural-price figures are pessimistic; held to expiry, so no exit rules; many conditions
 were examined, so the strongest finding (IV percentile) still needs out-of-sample confirmation.
+Figures refreshed on 2026-11-08 after a study fix: windows whose expiry falls after the last stored
+close are now left out (about 2% of rows had been settled at the last close instead); no conclusion changed.
 
 ## 3. Our rules, one by one
 

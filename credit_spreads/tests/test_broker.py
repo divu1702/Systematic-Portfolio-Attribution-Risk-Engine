@@ -84,8 +84,9 @@ class FakeKite:
         self.quote_calls.append(list(keys))
         return {k: {"last_price": 1.0, "timestamp": datetime(2026, 11, 6, 15, 0)} for k in keys}
 
-    def historical_data(self, token, start, end, interval, oi=False):
+    def historical_data(self, token, start, end, interval, continuous=False, oi=False):
         self.hist_calls.append((start, end))
+        self.hist_flags = (continuous, oi)
         out, d = [], start
         while d <= end:
             out.append({"date": d, "open": 1, "high": 1, "low": 1, "close": 1, "volume": 0})
@@ -140,6 +141,9 @@ def test_kite_historical_chunks_and_dedupes(kite_broker):
     assert len(b.kite.hist_calls) == 3                       # 100-day chunks
     dates = [r["date"] for r in rows]
     assert len(dates) == len(set(dates))
+    assert b.kite.hist_flags == (False, True)                # open interest always requested
+    b.historical(1, datetime(2026, 1, 1), datetime(2026, 2, 1), "day", continuous=True)
+    assert b.kite.hist_flags == (True, True)                 # continuous futures passed through to Kite
 
 
 def test_kite_margin_positions_instruments(kite_broker):

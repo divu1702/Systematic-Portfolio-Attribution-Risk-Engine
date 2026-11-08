@@ -114,8 +114,7 @@ def run_archive(ctx, budget: Optional[int] = None, progress: Optional[Callable[[
 
     def fetch(token: int, start: date, continuous: bool = False) -> List[dict]:
         rep.requests += 1
-        return ctx.broker.historical(token, datetime.combine(start, time(0)), now, "day",
-                                     **({"continuous": True} if continuous else {}))
+        return ctx.broker.historical(token, datetime.combine(start, time(0)), now, "day", continuous=continuous)
 
     def save_options(i: Instrument, rows: List[dict]) -> int:
         store.executemany("INSERT OR REPLACE INTO option_candles VALUES (?,?,?,?,?,?,?,?,?,?,?,?)", [

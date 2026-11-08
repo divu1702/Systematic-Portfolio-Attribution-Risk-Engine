@@ -25,7 +25,7 @@ pip install -r requirements.txt
 cp .env.example .env          # type your Kite key/secret and Telegram token here; never commit .env
 python -m app migrate         # creates data/trading.db
 python -m app doctor          # config, secrets (set/missing only), database status
-python -m pytest              # ~160 offline tests
+python -m pytest              # ~190 offline tests
 ```
 
 ## Daily use
@@ -38,6 +38,7 @@ python -m pytest              # ~160 offline tests
 | every 5 min | Marks open spreads at natural prices and applies the exit rules. 15:15 is the thesis-stop check. |
 | 15:00 | Scan, then paper entries for the top candidates that pass sizing and portfolio limits. |
 | 15:35 | Daily candles, levels, turnover, events, equity and drawdown. |
+| 16:10 | Kite history archiver: saves daily candles of listed options and futures before Kite drops them (see below). |
 | Friday 16:00 | Weekly HTML report in `reports/`. |
 
 If the laptop sleeps, the next monitor run replays the missed 5-minute marks from Kite candles
@@ -95,6 +96,42 @@ python -m app backtest run --market nse --warmup 30 --report
 
 replays that history through the same code with your rupee capital and Zerodha costs. Unlike the US
 data, it carries real order-book depth, and events are visible exactly from the day they were first seen.
+
+### Kite history archiver (Indian option history before it disappears)
+
+Kite serves daily candles only for contracts that are still listed; when a monthly series expires
+its option history is gone. The archiver keeps it, in the same `data/market_nse.db`:
+
+```bash
+python -m app archive              # first run: backfill (resumable; can be left running overnight)
+python -m app archive --status     # what has been saved so far
+```
+
+The first run saves up to 2,000 days of stock bars, each stock's continuous futures, every listed
+futures contract, and the daily candles (OHLC, volume, OI) since listing of every listed option within
++-25% of the stock price. After that, the 16:10 job tops up each monthly series in its last 3 trading
+days, so every series is saved in full. Each run stops after `archive.max_requests_per_run` (5,000)
+Kite calls at Kite's 3 a second, roughly half an hour; an unfinished backfill continues the next
+evening. Settings: `archive:` in config.yaml. Candles are trade prices, not quotes: the recorder above
+adds the real bid/ask from the day paper trading starts.
+
+### Research study on Indian data
+
+`research/option_selling_study.py` measures where selling stock options pays (implied vs later
+realised volatility, single options and vertical spreads held to expiry, the effect of each entry
+filter, support/resistance). It runs on the US data (`--market us`, results in
+`research/results_us.md`) and on the Indian store:
+
+```bash
+python research/option_selling_study.py --market nse > research/results_nse.md
+```
+
+On Indian data, IV and delta come from each option's daily close with the same expiry's futures as
+the forward; bid/ask comes from recorded quotes where they exist, otherwise from the spreads recorded
+for that stock and delta (or `--assume-spread`, 4% of the price, until enough quotes are recorded).
+An option enters the study once its expiry has passed. The output says how many completed expiries
+it rests on: t-statistics need at least 8 monthly expiries, and anything under about 24 (two years)
+is anecdotal.
 
 ## First run on real data: checklist
 
