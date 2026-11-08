@@ -29,11 +29,46 @@ elevated IV; at natural prices almost nothing qualifies. This holds in any marke
 The path-simulated EV filter already tests whether the credit pays for the risk, which is what F8
 is meant to ensure.
 
+### Research variants (diagnostics, not new defaults)
+
+| Variant | Trades | Win rate (breakeven) | Net on $100k | Profit factor | Max DD |
+|---|---|---|---|---|---|
+| A: credit/width 15%, bid-ask 20% | 0 | - | - | - | - |
+| B: A + IV/HV 1.10 | 0 | - | - | - | - |
+| C: A + spec's expiry-based EV | 19 | 37% (82%) | -$11,114 | 0.25 | 11.6% |
+| D: C without the thesis stop | 12 | 42% (81%) | -$10,590 | 0.20 | 10.7% |
+
+- In A and B the path-simulated EV rejected every candidate. Decomposing it on those spreads (share
+  of max loss): +3.1% with no exit rules, +2.9% with the hard stop only, +1.4% with the 50% profit
+  target only, +0.7% with all rules; crossing the end-of-day bid-ask twice costs about 6%. The
+  edge (IV above forecast vol) is real but small, and the profit target removes about half of it.
+- In C, where trades were allowed, the expiry-based p_model said 71-80% and 37% of trades won.
+  Both halves of the period lost money. Bear calls (7 trades, 1 winner) lost most in a rising market.
+- Hard stops lost $1.3-2.3k each against $0.4-0.7k per winner. Most were narrow spreads with tiny
+  credits (0.17-0.41 a share): the 2x-credit stop on natural prices fired on bid-ask noise, and sizing
+  by risk at the stop made those positions large (29-60 contracts). Losses ran 1.6-2x the planned risk
+  because stops were checked once a day.
+- Caveats: 19 trades is a small sample; US market; end-of-day quotes are wider than intraday quotes and
+  stops were checked at the close. The direction of the evidence is still consistent across halves.
+
 ## Decisions for the owner
 
 1. **F8.** Lower the floor to a sanity level (for example 15%) and let the path EV judge credit
-   quality, or keep 25% and accept very few trades. See the research variants for evidence.
-2. **Event source for NSE.** NSE refuses honest automated clients. Either drop the Board Meetings and
+   quality, or keep 25% and accept very few trades.
+2. **Which strategy fixes to test next** (each as a config option, judged on the first half of the
+   data and confirmed on the second half, per the tuning rule):
+   - *Minimum credit versus the bid-ask:* require the net credit to be at least 2x the two legs'
+     combined bid-ask, plus a minimum in ticks, and cap contracts per trade. Removes noise-driven stops
+     and oversized positions on tiny credits.
+   - *Stops on the mid price:* trigger the hard stop on the mid-price cost to close and fill at natural
+     prices when it fires, so a wide quote alone cannot stop a trade out.
+   - *Profit target:* 50% halves the modelled edge; test 65-75% or holding to the time stop.
+   - *A forward-looking volatility forecast for F3:* after a large move realised volatility tends to
+     stay high, so IV / HV20 overstates how rich IV is. Compare IV with an EWMA or GARCH forecast, or
+     require the last 5 days' realised volatility to have dropped back ("cause has passed").
+   - *Trend filter for bear calls:* only sell call spreads when the stock is below, say, its 50-day
+     average.
+3. **Event source for NSE.** NSE refuses honest automated clients. Either drop the Board Meetings and
    Corporate Actions CSV exports from nseindia.com into `imports/events/` about weekly (free), or
    buy a licensed corporate-actions feed (paid). Without one of these, F2 fails closed and nothing trades.
 

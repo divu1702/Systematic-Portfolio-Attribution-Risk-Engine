@@ -308,6 +308,8 @@ def _cmd_backtest(args: argparse.Namespace) -> int:
     from .fmt import inr, set_currency
 
     set_currency(bt_cfg.market.currency)
+    if args.set:
+        ctx.banner += " Research overrides (not the live settings): " + ", ".join(args.set) + "."
     print(f"Backtest: {len(universe)} {'NSE' if nse else 'US'} stocks, {days[0]} to {days[-1]} ({len(days)} days, "
           f"first {args.warmup} warm-up), capital {inr(bt_cfg.capital)}" + (f", overrides {args.set}" if args.set else ""),
           flush=True)
