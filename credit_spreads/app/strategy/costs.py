@@ -30,11 +30,14 @@ class OrderCost:
         return self.brokerage + self.stt + self.exchange + self.sebi + self.stamp + self.gst
 
 
-def order_cost(c: CostsCfg, side: str, premium: float, qty: int) -> OrderCost:
+def order_cost(c: CostsCfg, side: str, premium: float, qty: int, lot: int = 1) -> OrderCost:
     if c.missing:
         raise CostModelIncomplete(f"cost rates not set in config.yaml: {', '.join(c.missing)}")
     if side not in ("BUY", "SELL"):
         raise ValueError(f"side must be BUY or SELL, got {side!r}")
+    if c.model == "per_contract":
+        contracts = max(1, round(qty / max(lot, 1)))
+        return OrderCost(c.brokerage_per_order + c.per_contract * contracts, 0, 0, 0, 0, 0)
     turnover = max(premium, 0.0) * qty
     if turnover <= 0:
         return OrderCost(0, 0, 0, 0, 0, 0)
@@ -47,20 +50,21 @@ def order_cost(c: CostsCfg, side: str, premium: float, qty: int) -> OrderCost:
     return OrderCost(brokerage, stt, exchange, sebi, stamp, gst)
 
 
-def entry_costs(c: CostsCfg, short_px: float, long_px: float, qty: int) -> float:
+def entry_costs(c: CostsCfg, short_px: float, long_px: float, qty: int, lot: int = 1) -> float:
     """Open a credit spread: sell the short leg, buy the long leg."""
-    return order_cost(c, "SELL", short_px, qty).total + order_cost(c, "BUY", long_px, qty).total
+    return order_cost(c, "SELL", short_px, qty, lot).total + order_cost(c, "BUY", long_px, qty, lot).total
 
 
-def exit_costs(c: CostsCfg, short_px: float, long_px: float, qty: int) -> float:
+def exit_costs(c: CostsCfg, short_px: float, long_px: float, qty: int, lot: int = 1) -> float:
     """Close a credit spread: buy back the short leg, sell the long leg."""
-    return order_cost(c, "BUY", short_px, qty).total + order_cost(c, "SELL", long_px, qty).total
+    return order_cost(c, "BUY", short_px, qty, lot).total + order_cost(c, "SELL", long_px, qty, lot).total
 
 
 def round_trip_costs(c: CostsCfg, short_px: float, long_px: float, qty: int,
-                     exit_short_px: Optional[float] = None, exit_long_px: Optional[float] = None) -> float:
+                     exit_short_px: Optional[float] = None, exit_long_px: Optional[float] = None,
+                     lot: int = 1) -> float:
     """Entry plus exit costs. Exit premiums default to the entry premiums, which overstates
     exit STT and charges for a winning trade, so the estimate errs on the costly side."""
     xs = short_px if exit_short_px is None else exit_short_px
     xl = long_px if exit_long_px is None else exit_long_px
-    return entry_costs(c, short_px, long_px, qty) + exit_costs(c, xs, xl, qty)
+    return entry_costs(c, short_px, long_px, qty, lot) + exit_costs(c, xs, xl, qty, lot)

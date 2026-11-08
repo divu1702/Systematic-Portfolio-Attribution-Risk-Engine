@@ -97,12 +97,16 @@ schedule:                                             # + all times IST
   no_entry_end: "09:20"
 killswitch: {stale_quote_secs: 60, max_rejections_per_day: 3, reconcile_every_min: 5}   # +
 costs:                 # update when broker or exchange rates change
+  model: zerodha            # + zerodha | per_contract (US-style flat fee per contract)
+  per_contract: 0           # + only used by the per_contract model
   brokerage_per_order: 20
   stt_sell_premium: 0.0015
   exchange_txn_pct: 0.0003503  # NSE 0.03503% of premium (zerodha.com/charges, Nov 2026)
   sebi_fee_per_crore: 10
   stamp_buy_pct: 0.00003
   gst: 0.18
+ops: {backup_keep: 14, heartbeat: true}               # + daily DB backups; end-of-day summary alert
+market: {name: nse, currency: INR}                    # + backtests on other markets override this
 paths:                                                # + relative to this file's folder
   db: data/trading.db
   logs: logs
@@ -112,3 +116,4 @@ paths:                                                # + relative to this file'
   holidays_manual: holidays_manual.csv
   kite_session: data/kite_session.json   # today's access token only; expires next morning
   fixtures: fixtures
+  imports: imports          # + drop NSE event CSV exports into imports/events/

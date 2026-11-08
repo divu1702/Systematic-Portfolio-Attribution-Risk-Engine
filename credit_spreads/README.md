@@ -62,15 +62,37 @@ streamlit run app/reporting/dashboard.py -- --db data/trading_mock.db   # option
 The synthetic market (made-up tickers STK01..) tests the machinery. Its results say nothing about
 whether the strategy has an edge.
 
+## Backtest on real data (US stock options)
+
+Indian historical option quotes are not freely available to automated clients (NSE's site runs a bot
+check, and Kite has no history for expired contracts), so the real-data backtest uses DoltHub's free
+US data: end-of-day bid/ask for ~25 strikes x 3 expiries per stock per day, daily bars, splits and
+earnings dates. The replay drives the **same** instrument refresh, scanner, entries, monitor and
+end-of-day jobs as live trading, one trading day at a time, with no data after the simulated day.
+
+```bash
+python -m app backtest load --start 2024-01-02 --end 2026-10-30     # ~1 hour, resumable
+python -m app backtest run --warmup 130 --report                     # spec thresholds, owner rules
+python -m app backtest run --set iv.min_iv_hv_ratio=1.15 --db data/bt_f3.db   # a variant
+```
+
+Differences from live: US market (dollars, 100-share contracts, per-contract fees of $0.70, weekly
+expiries), stops checked once a day at the close instead of every 5 minutes, no 09:20 gap check,
+order-book size unknown (depth never binds), and legs that drop out of the day's data sample are
+priced with Black-76 at their last observed IV (counted in the summary). Universe and sectors:
+`app/backtest/us_universe.csv`.
+
 ## First run on real data: checklist
 
 These could not be verified offline (the build machine has no access to Zerodha or NSE):
 
 1. `python -m app login`, then `python -m app chain <a liquid F&O stock>`: lot size, strike step,
    futures price and IVs should look like Kite's own option chain.
-2. `python -m app scan --why`: check `logs/app.log` for NSE warnings. The first run fetches events,
-   the Nifty 500 sector list, holidays and 20 days of F&O bhavcopy. If NSE changed a field name, the
-   log says which rows were skipped.
+2. `python -m app scan --why`: check `logs/app.log` for NSE warnings. The system asks NSE for events,
+   sectors and holidays with an honest client identity and does not try to get past NSE's bot check.
+   If NSE refuses, F2 fails closed (no trades). Then download the Board Meetings and Corporate
+   Actions CSVs from nseindia.com in your browser and drop them into `imports/events/` (weekly is
+   enough: each file counts as fresh for 2 days after you save it), or use a licensed data feed.
 3. Expect no trades for the first few weeks. F5 needs IV snapshots from earlier days (fails closed
    until then), and F4 uses the HV-percentile proxy until 120 trading days of IV history exist.
 4. `python -m app record <SYMBOL> <SYMBOL>` saves real responses under `fixtures/` for offline tests.

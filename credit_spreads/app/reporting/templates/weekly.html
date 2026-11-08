@@ -76,14 +76,15 @@ svg .hit:hover { fill: var(--text-primary); opacity: 0.05; }
 </head>
 <body>
 <main>
-  <h1>Weekly paper-trading report</h1>
+  <h1>{{ 'Backtest report' if banner else 'Weekly paper-trading report' }}</h1>
   <div class="sub">{{ start }} to {{ asof }} &middot; mode {{ mode|upper }} &middot; generated {{ generated.strftime('%Y-%m-%d %H:%M') }} IST</div>
-  {% if mock %}<div class="banner"><strong>Synthetic market.</strong> These results come from the offline simulator. They test the machinery and say nothing about real edge.</div>{% endif %}
+  {% if banner %}<div class="banner"><strong>Backtest.</strong> {{ banner }}</div>
+  {% elif mock %}<div class="banner"><strong>Synthetic market.</strong> These results come from the offline simulator. They test the machinery and say nothing about real edge.</div>{% endif %}
 
   <div class="tiles">
     <div class="tile"><div class="k">Equity</div><div class="v">{{ equity|inr }}</div></div>
     <div class="tile"><div class="k">Closed trades (all time)</div><div class="v">{{ all_closed|length }}</div></div>
-    <div class="tile"><div class="k">Closed this week</div><div class="v">{{ week_closed|length }}</div></div>
+    <div class="tile"><div class="k">Closed {{ 'in period' if period_days > 7 else 'this week' }}</div><div class="v">{{ week_closed|length }}</div></div>
     <div class="tile"><div class="k">Open spreads</div><div class="v">{{ open_trades|length }}</div></div>
     <div class="tile"><div class="k">Win rate vs breakeven</div><div class="v">{% if win_rate is not none %}{{ '%.0f'|format(win_rate*100) }}% / {{ '%.0f'|format((be_avg or 0)*100) }}%{% else %}-{% endif %}</div></div>
   </div>
@@ -106,7 +107,7 @@ svg .hit:hover { fill: var(--text-primary); opacity: 0.05; }
   </div>
 
   <div class="card">
-    <h2>Trades closed this week</h2>
+    <h2>Trades closed {{ 'in this period' if period_days > 7 else 'this week' }}</h2>
     {% if week_closed %}
     <table>
       <tr><th>Symbol</th><th>Side</th><th>Strikes</th><th>Expiry</th><th class="r">Lots</th><th>Entry</th><th>Exit</th>
@@ -119,7 +120,7 @@ svg .hit:hover { fill: var(--text-primary); opacity: 0.05; }
           <td>{{ 'gap ' if t.gap_flag }}{{ 'replayed ' if t.replayed }}{{ 'margin-fallback' if t.margin_fallback }}</td></tr>
       {% endfor %}
     </table>
-    {% else %}<p class="muted">No trades closed this week.</p>{% endif %}
+    {% else %}<p class="muted">No trades closed in this period.</p>{% endif %}
     {% if open_trades %}
     <h2 style="margin-top:16px">Open spreads</h2>
     <table>
@@ -148,7 +149,7 @@ svg .hit:hover { fill: var(--text-primary); opacity: 0.05; }
 
   <div class="grid2" style="margin-top:16px">
     <div class="card">
-      <h2>Rejection funnel this week</h2>
+      <h2>Rejection funnel {{ 'for the period' if period_days > 7 else 'this week' }}</h2>
       <p class="muted">{{ funnel_week[0] }} stock-scans; {{ funnel_week[2] }} accepted. Bars show how many each stage removed.</p>
       {{ funnel_week_svg|safe }}
       <table style="margin-top:8px"><tr><th>Stage</th><th class="r">Removed</th><th class="r">Remaining</th></tr>

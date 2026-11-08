@@ -117,6 +117,7 @@ class Candidate(Base):
     accepted: Mapped[bool] = mapped_column(Boolean, default=False)
     reject_reason: Mapped[Optional[str]] = mapped_column(Text)
     inputs_json: Mapped[Optional[str]] = mapped_column(Text)
+    config_hash: Mapped[Optional[str]] = mapped_column(String)
 
 
 class Trade(Base):
@@ -160,6 +161,7 @@ class Trade(Base):
     long_k: Mapped[Optional[float]] = mapped_column(Float)
     replayed: Mapped[bool] = mapped_column(Boolean, default=False)
     risk: Mapped[Optional[float]] = mapped_column(Float)
+    config_hash: Mapped[Optional[str]] = mapped_column(String)
 
 
 class Mark(Base):
@@ -252,3 +254,10 @@ class Proposal(Base):
     status: Mapped[str] = mapped_column(String, default="pending")
     decided_at: Mapped[Optional[dt.datetime]] = mapped_column(DateTime)
     expires_at: Mapped[dt.datetime] = mapped_column(DateTime)
+
+
+class ConfigVersion(Base):
+    __tablename__ = "config_versions"
+    hash: Mapped[str] = mapped_column(String, primary_key=True)
+    first_seen: Mapped[dt.datetime] = mapped_column(DateTime)
+    config_json: Mapped[str] = mapped_column(Text)

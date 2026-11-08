@@ -3,7 +3,28 @@
 from __future__ import annotations
 
 
+_CURRENCY = "INR"
+
+
+def set_currency(code: str) -> None:
+    """Display currency for money(): INR uses Indian digit grouping, USD western grouping."""
+    global _CURRENCY
+    _CURRENCY = code
+
+
+def money(amount: float, decimals: int = 0) -> str:
+    if _CURRENCY == "USD":
+        sign = "-" if amount < 0 else ""
+        return f"{sign}${abs(amount):,.{decimals}f}"
+    return _inr(amount, decimals)
+
+
 def inr(amount: float, decimals: int = 0) -> str:
+    """Money in the current display currency (rupees by default, the name predates USD support)."""
+    return money(amount, decimals)
+
+
+def _inr(amount: float, decimals: int = 0) -> str:
     """Format rupees with Indian digit grouping: 500000 -> '₹5,00,000'."""
     sign = "-" if amount < 0 else ""
     amount = abs(amount)

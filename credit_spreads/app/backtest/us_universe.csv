@@ -1,0 +1,49 @@
+symbol,sector
+AAPL,Information Technology
+MSFT,Information Technology
+NVDA,Information Technology
+AMD,Information Technology
+ORCL,Information Technology
+CRM,Information Technology
+ADBE,Information Technology
+INTC,Information Technology
+QCOM,Information Technology
+CSCO,Information Technology
+GOOGL,Communication Services
+META,Communication Services
+NFLX,Communication Services
+DIS,Communication Services
+VZ,Communication Services
+AMZN,Consumer Discretionary
+TSLA,Consumer Discretionary
+HD,Consumer Discretionary
+NKE,Consumer Discretionary
+MCD,Consumer Discretionary
+SBUX,Consumer Discretionary
+GM,Consumer Discretionary
+JPM,Financials
+BAC,Financials
+GS,Financials
+MS,Financials
+V,Financials
+MA,Financials
+PYPL,Financials
+XOM,Energy
+CVX,Energy
+OXY,Energy
+SLB,Energy
+JNJ,Health Care
+PFE,Health Care
+MRK,Health Care
+ABBV,Health Care
+UNH,Health Care
+LLY,Health Care
+WMT,Consumer Staples
+COST,Consumer Staples
+KO,Consumer Staples
+PG,Consumer Staples
+BA,Industrials
+CAT,Industrials
+GE,Industrials
+NEE,Utilities
+FCX,Materials

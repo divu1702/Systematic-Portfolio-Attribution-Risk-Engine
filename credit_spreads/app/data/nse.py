@@ -1,8 +1,12 @@
 """Exchange-side data that Kite does not provide: corporate events, sectors, trading holidays,
 and stock-option turnover (for the F1 universe ranking). All sources are free and public.
 
-NSEClient     - nseindia.com JSON APIs and nsearchives.nseindia.com files. NSE expects a
-                browser-like client: it sets cookies on the home page, then serves the APIs.
+NSEClient     - nseindia.com JSON APIs and nsearchives.nseindia.com files, requested with an
+                honest client identity. NSE runs a bot check and may refuse automated clients;
+                this client does not impersonate a browser to get past it. When NSE refuses,
+                the fetch is logged as failed, F2 fails closed, and the owner can instead drop
+                CSV exports downloaded from nseindia.com in a browser into imports/events/
+                (see app/data/imports.py), or use a licensed data feed.
 SyntheticNSE  - the same interface backed by the synthetic market, for mock mode.
 
 Field names in NSE responses change occasionally, so parsers accept several spellings and
@@ -25,13 +29,10 @@ API = NSE_HOME + "/api"
 ARCHIVES = "https://nsearchives.nseindia.com"
 SECTORS_CSV = ARCHIVES + "/content/indices/ind_nifty500list.csv"
 BHAVCOPY_UDIFF = ARCHIVES + "/content/fo/BhavCopy_NSE_FO_0_0_0_{ymd}_F_0000.csv.zip"
-# A generic desktop browser identity; NSE rejects obvious script clients.
+# Honest identification; no browser impersonation, cookie warm-up or bot-check workarounds.
 HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                  "(KHTML, like Gecko) Chrome/124.0 Safari/537.36",
-    "Accept": "application/json, text/plain, */*",
-    "Accept-Language": "en-US,en;q=0.9",
-    "Referer": NSE_HOME + "/",
+    "User-Agent": "credit-spreads/0.1 (personal paper-trading system)",
+    "Accept": "application/json, text/csv, */*",
 }
 
 
@@ -169,20 +170,12 @@ class NSEClient:
         self.timeout = timeout
         self.s = session or requests.Session()
         self.s.headers.update(HEADERS)
-        self._warm = False
-
-    def _warmup(self) -> None:
-        if not self._warm:
-            self.s.get(NSE_HOME, timeout=self.timeout)
-            self._warm = True
 
     def _get_json(self, url: str, params: dict):
-        self._warmup()
         r = self.s.get(url, params=params, timeout=self.timeout)
         if r.status_code in (401, 403):
-            self._warm = False           # cookies expired: warm up once and retry
-            self._warmup()
-            r = self.s.get(url, params=params, timeout=self.timeout)
+            raise NSEError(f"{url} refused the request (HTTP {r.status_code}); NSE may block automated "
+                           "clients. Use CSV exports in imports/events/ instead.")
         if r.status_code != 200:
             raise NSEError(f"{url} returned HTTP {r.status_code}")
         try:

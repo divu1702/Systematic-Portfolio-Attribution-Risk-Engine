@@ -12,10 +12,10 @@ from app.data.models import Base, Candidate, Trade
 def test_fresh_database_is_migrated_and_idempotent(tmp_path):
     db = tmp_path / "t.db"
     applied = migrations.upgrade(db)
-    assert [m.version for m in applied] == [1, 2, 3, 4, 5]
+    assert [m.version for m in applied] == [1, 2, 3, 4, 5, 6]
     assert migrations.upgrade(db) == []
     st = db_status(db)
-    assert st["version"] == st["latest"] == 5
+    assert st["version"] == st["latest"] == 6
     assert all(n == 0 for n in st["tables"].values())
 
 

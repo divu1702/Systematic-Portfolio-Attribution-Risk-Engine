@@ -162,3 +162,48 @@ def sim_summary(ctx, results) -> str:
         lines.append(f"\nEquity {inr(eq[0].equity)} -> {inr(eq[-1].equity)}, max drawdown "
                      f"{max(e.drawdown for e in eq):.1%}")
     return "\n".join(lines)
+
+
+def backtest_summary(run) -> str:
+    from collections import Counter
+
+    from .fmt import inr
+    from .reporting import metrics
+
+    ctx = run.ctx
+    closed = metrics.closed_trades(ctx.engine)
+    eq = metrics.equity_series(ctx.engine)
+    b = ctx.broker
+    lines = ["", f"BACKTEST ({run.seconds / 60:.1f} min): real end-of-day data, stops checked at each close", ""]
+    trading = run.days[run.warmup:]
+    lines.append(f"Trading days {len(trading)} ({trading[0]} to {trading[-1]}), entries {len(run.entries)}, "
+                 f"entry rejections {len(run.rejections)}, closed {len(closed)}, "
+                 f"open at end {len(metrics.all_trades(ctx.engine)) - len(closed)}")
+    if closed:
+        net = sum(t.pnl_net for t in closed)
+        wins = sum(1 for t in closed if t.pnl_net > 0)
+        reasons = Counter((t.exit_reason or "").split(":")[0] for t in closed)
+        lines.append(f"Win rate {wins / len(closed):.0%}, net P&L {inr(net)}, average {inr(net / len(closed))} per trade")
+        lines.append("Exit reasons: " + ", ".join(f"{k} {v}" for k, v in reasons.most_common()))
+    if eq:
+        lines.append(f"Equity {inr(eq[0].equity)} -> {inr(eq[-1].equity)}, max drawdown {max(e.drawdown for e in eq):.1%}")
+    total_q = getattr(b, "real_quotes", 0) + getattr(b, "modelled_quotes", 0)
+    if total_q:
+        lines.append(f"Option quotes from data {b.real_quotes:,}, modelled (leg outside the day's sample) "
+                     f"{b.modelled_quotes:,} ({b.modelled_quotes / total_q:.1%})")
+    lines += ["", "Go-live scorecard"]
+    for m in metrics.go_live(ctx.engine, ctx.cfg.capital, closed):
+        status = "reported" if m.passed is None else ("PASS" if m.passed else "fail")
+        lines.append(f"  {m.name:<24} {m.display:<40} bar {m.bar:<22} {status}")
+    f = metrics.funnel(ctx.engine)
+    total = sum(f.values())
+    lines += ["", f"Rejection funnel ({total:,} stock-days scanned, warm-up included)"]
+    remaining = total
+    for stage, n in f.items():
+        if stage == "accepted":
+            continue
+        remaining -= n
+        if n:
+            lines.append(f"  {stage:<20} -{n:>6,}   {remaining:>6,} left")
+    lines.append(f"  {'accepted':<20}  {f['accepted']:>6,}")
+    return "\n".join(lines)

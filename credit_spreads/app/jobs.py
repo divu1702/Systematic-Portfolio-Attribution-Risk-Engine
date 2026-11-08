@@ -65,8 +65,16 @@ def monitor_job(ctx, phase: str = "regular"):
 
 def eod_job(ctx):
     """15:35: today's final candles, levels and turnover; events refresh; equity and drawdown."""
+    from .ops import backup_database, heartbeat
     from .risk.equity import eod_equity
 
     catch_up_daily(ctx, ctx.clock.today())
     events.fetch_events(ctx)
-    return eod_equity(ctx)
+    point = eod_equity(ctx)
+    try:
+        backup_database(ctx)
+    except Exception as exc:          # a failed backup must not stop the end-of-day job
+        log.warning("database backup failed: %s", exc)
+        ctx.notifier.send(f"Database backup failed: {exc}", "warning")
+    heartbeat(ctx, point)
+    return point

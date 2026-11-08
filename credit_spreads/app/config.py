@@ -259,6 +259,10 @@ class KillSwitchCfg(_Section):
 
 
 class CostsCfg(_Section):
+    # "zerodha": the Indian stack below (brokerage, STT, exchange, SEBI, stamp, GST).
+    # "per_contract": a flat fee per option contract plus brokerage_per_order (US brokers).
+    model: Literal["zerodha", "per_contract"] = "zerodha"
+    per_contract: NonNegFloat = 0.0
     brokerage_per_order: NonNegFloat = 20
     stt_sell_premium: NonNegFloat = 0.0015
     # NSE options transaction charge on premium (Zerodha charges page, Nov 2026: 0.03503%).
@@ -273,6 +277,16 @@ class CostsCfg(_Section):
         return [name for name, val in self.model_dump().items() if val is None]
 
 
+class MarketCfg(_Section):
+    name: Literal["nse", "us"] = "nse"
+    currency: Literal["INR", "USD"] = "INR"     # display only
+
+
+class OpsCfg(_Section):
+    backup_keep: NonNegInt = 14         # daily database copies kept; 0 = no backups
+    heartbeat: bool = True              # end-of-day summary alert (silence means the system is down)
+
+
 class PathsCfg(_Section):
     db: str = "data/trading.db"
     logs: str = "logs"
@@ -281,6 +295,7 @@ class PathsCfg(_Section):
     sectors_manual: str = "sectors_manual.csv"
     holidays_manual: str = "holidays_manual.csv"
     kite_session: str = "data/kite_session.json"
+    imports: str = "imports"                   # imports/events/*.csv: event exports from nseindia.com
     fixtures: str = "fixtures"
 
 
@@ -310,6 +325,8 @@ class Config(_Section):
     schedule: ScheduleCfg = ScheduleCfg()
     killswitch: KillSwitchCfg = KillSwitchCfg()
     costs: CostsCfg = CostsCfg()
+    market: MarketCfg = MarketCfg()
+    ops: OpsCfg = OpsCfg()
     paths: PathsCfg = PathsCfg()
 
     # Directory the config file was loaded from; relative paths resolve against it.
@@ -323,6 +340,14 @@ class Config(_Section):
             raise ValueError("exit.days_before_expiry must be below dte_min, or every trade "
                              "would hit the time stop on entry")
         return self
+
+    def strategy_hash(self) -> str:
+        """Short hash of everything that can change a trading decision (paths and ops excluded)."""
+        import hashlib
+        import json
+
+        data = self.model_dump(mode="json", exclude={"base_dir", "paths", "ops"})
+        return hashlib.sha256(json.dumps(data, sort_keys=True).encode()).hexdigest()[:12]
 
     def resolve(self, relative: str) -> Path:
         p = Path(relative)

@@ -71,6 +71,12 @@ def _order_row(trade_id: Optional[str], purpose: str, leg: str, side: str, qty: 
                 if fill.ok else f"paper:{fill.reason}", ts=ts)
 
 
+def _config_hash(ctx) -> str:
+    from ..data.configlog import record
+
+    return record(ctx)
+
+
 def legs_of(trade: Trade) -> Tuple[dict, dict]:
     legs = json.loads(trade.legs_json)
     short = next(lg for lg in legs if lg["leg"] == "short")
@@ -122,7 +128,7 @@ class PaperExecutor:
         credit = short_fill.price - long_fill.price
         if credit <= 0:
             return EntryResult(False, reason="no credit after fills")
-        costs = entry_costs(cfg.costs, short_fill.price, long_fill.price, qty)
+        costs = entry_costs(cfg.costs, short_fill.price, long_fill.price, qty, cand.lot_size)
         max_loss = (cand.width - credit) * qty
         risk = risk_per_lot(cfg, credit, cand.width, cand.lot_size) * lots
         margin, fallback = self._margin(cand, qty, short_fill, long_fill, max_loss)
@@ -142,6 +148,7 @@ class PaperExecutor:
             hv20=i.get("hv20"), ivp=i.get("ivp"), ivp_method=i.get("ivp_method"), level_ref=i.get("level"),
             p_market=cand.p_market, p_model=cand.p_model, breakeven_wr=i.get("breakeven_win_rate"),
             iv_hv=i.get("iv_hv"), short_k=cand.short_k, long_k=cand.long_k, mae=0.0, mfe=0.0,
+            config_hash=_config_hash(ctx),
         )
         with ctx.engine.begin() as conn:
             conn.execute(insert(Trade).values(**row))
@@ -193,7 +200,7 @@ class PaperExecutor:
                 # (a bought option cannot hurt); value it at zero if there is no bid at all.
                 l_fill = Fill(True, qty, 0.0, 0.0, 0.0, 0, "no bid: long valued at 0")
         exit_cost = s_fill.price - l_fill.price
-        x_costs = exit_costs(cfg.costs, s_fill.price, l_fill.price, qty)
+        x_costs = exit_costs(cfg.costs, s_fill.price, l_fill.price, qty, trade.lot_size)
         pnl_gross = (trade.entry_credit - exit_cost) * qty
         pnl_net = pnl_gross - trade.costs - x_costs
         with ctx.engine.begin() as conn:

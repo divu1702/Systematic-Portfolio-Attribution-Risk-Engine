@@ -5,6 +5,17 @@ Each entry names the keys changed, old and new values, and the evidence.
 
 ## Unreleased
 
+### Real-data backtest and architecture (8 Nov 2026)
+- `python -m app backtest load|run`: DoltHub US end-of-day option quotes, earnings and splits replayed
+  through the live code path (HistoricalBroker, HistoricalExchange, runner); `--set` overrides for
+  variants. Market profile (`market.name`, `market.currency`) and a per-contract cost model.
+- Scan quotes are prefetched in batched broker calls (at most ~4 calls per scan instead of 2-4 per
+  stock): about a minute for ~220 stocks at Kite's one request a second, instead of 7-15 minutes.
+- NSE client no longer impersonates a browser or works around NSE's bot check; when NSE refuses,
+  F2 fails closed and event CSV exports dropped into `imports/events/` keep F2 working.
+- Every candidate and trade records `config_hash`; `config_versions` stores the full thresholds.
+- End-of-day: daily SQLite backup (`ops.backup_keep`), heartbeat alert (`ops.heartbeat`).
+
 ### Owner decisions, 6 Nov 2026 (before any paper trades)
 - Risk is sized by the loss at the hard stop, not by maximum loss: `risk.sizing_basis: stop`.
   Risk per share = (stop_mult - 1) x credit x `risk.stop_overshoot` (1.25, because stops fill past

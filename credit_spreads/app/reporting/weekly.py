@@ -49,6 +49,7 @@ def build_report(ctx, asof: Optional[date] = None, days: int = 7) -> str:
     env.filters.update(inr=inr, pct=pct)
     return env.get_template("weekly.html").render(
         asof=asof, start=start, generated=ctx.clock.now(), mode=ctx.cfg.mode, mock=ctx.is_mock,
+        banner=getattr(ctx, "banner", ""), period_days=days,
         capital=ctx.cfg.capital, equity=eq[-1].equity if eq else ctx.cfg.capital, scorecard=scorecard,
         go_live=all(m.passed for m in scorecard if m.passed is not None),
         equity_svg=charts.line_chart([(e.date, e.equity) for e in eq], label="equity"),
@@ -65,10 +66,11 @@ def build_report(ctx, asof: Optional[date] = None, days: int = 7) -> str:
     )
 
 
-def write_report(ctx, asof: Optional[date] = None, out_dir: Optional[Path] = None) -> Path:
+def write_report(ctx, asof: Optional[date] = None, out_dir: Optional[Path] = None, days: int = 7,
+                 name: Optional[str] = None) -> Path:
     asof = asof or ctx.clock.today()
     out_dir = out_dir or ctx.cfg.resolve(ctx.cfg.reporting.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
-    path = out_dir / f"weekly_{asof.isoformat()}{'_mock' if ctx.is_mock else ''}.html"
-    path.write_text(build_report(ctx, asof), encoding="utf-8")
+    path = out_dir / f"{name or 'weekly_' + asof.isoformat() + ('_mock' if ctx.is_mock else '')}.html"
+    path.write_text(build_report(ctx, asof, days=days), encoding="utf-8")
     return path

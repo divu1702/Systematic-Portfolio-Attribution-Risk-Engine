@@ -30,6 +30,7 @@ class Context:
     notifier: Notifier
     nse: Any = None                   # exchange data source (app/data/nse.py)
     is_mock: bool = False
+    banner: str = ""                  # shown on reports, e.g. "Backtest on real US data"
     cache: Dict[str, Any] = field(default_factory=dict)
 
 
@@ -58,6 +59,9 @@ def build_context(cfg: Config, *, mock: Optional[bool] = None, clock: Optional[C
         broker = KiteBroker(cfg, env, clock)
         path = db_path or cfg.db_path
     engine = init_db(path)
+    from .fmt import set_currency
+
+    set_currency(cfg.market.currency)
     if notifier is None:
         notifier = LogNotifier()
         if not is_mock and env.get("TELEGRAM_BOT_TOKEN") and env.get("TELEGRAM_CHAT_ID"):

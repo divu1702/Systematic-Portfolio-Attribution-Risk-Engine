@@ -245,3 +245,14 @@ def test_thesis_stop_and_half_spread_cost():
 
 def test_default_scan_uses_path_ev(cfg):
     assert cfg.ev.method == "paths" and cfg.ev.n_paths == 2000
+
+
+def test_scan_quotes_are_batched(cfg, tmp_path):
+    """The whole scan should cost a handful of broker quote calls, not several per stock."""
+    ctx = _ctx_at(cfg, tmp_path)
+    morning_refresh(ctx)
+    scan_job(ctx)                                     # warm caches (instruments, candles, levels)
+    ctx.broker.quote_calls = 0
+    run_scan(ctx)
+    assert ctx.broker.quote_calls <= 4               # stocks+futures, then all legs (+ rare fallbacks)
+    assert "scan_quotes" not in ctx.cache

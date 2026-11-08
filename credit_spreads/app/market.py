@@ -42,6 +42,37 @@ def pick_expiry(expiries: List[date], today: date, min_days: int, max_days: Opti
     return None
 
 
+def prefetch_scan_quotes(ctx, symbols: List[str], d: date, expiries_for, band: float) -> Dict[str, Quote]:
+    """Fetch every quote a scan needs in as few broker calls as possible: first the stocks and
+    futures, then all option legs within `band` of each futures price. Kite allows one quote
+    request a second with up to 500 instruments each, so ~220 stocks take about a minute this way
+    instead of several hundred single-stock requests."""
+    plans = {}
+    head: List[str] = []
+    for sym in symbols:
+        chains = {}
+        for e in expiries_for(sym):
+            try:
+                chains[e] = inst.load_chain(ctx.engine, d, sym, e)
+            except LookupError:
+                continue
+        plans[sym] = chains
+        for ch in chains.values():
+            head.append(ch.equity_key)
+            if ch.future:
+                head.append(ch.future.key)
+    cache = ctx.broker.quotes(list(dict.fromkeys(head)))
+    legs: List[str] = []
+    for sym, chains in plans.items():
+        for ch in chains.values():
+            fq = cache.get(ch.future.key) if ch.future else None
+            sq = cache.get(ch.equity_key)
+            ref = (fq.mid or fq.last) if fq else ((sq.mid or sq.last) if sq else None)
+            legs += [leg.key for leg in ch.legs.values() if ref is None or abs(leg.strike / ref - 1) <= band]
+    cache.update(ctx.broker.quotes(list(dict.fromkeys(legs))))
+    return cache
+
+
 @dataclass
 class ChainSnapshot:
     chain: inst.Chain
@@ -67,14 +98,26 @@ class ChainSnapshot:
         return atm_iv(self.ivs, self.fut_price) if self.fut_price else None
 
 
+def _quotes(ctx, keys: List[str], cache: Optional[Dict[str, Quote]]) -> Dict[str, Quote]:
+    """Quotes from a prefetched cache where possible; anything missing goes to the broker."""
+    if cache is None:
+        return ctx.broker.quotes(keys)
+    out = {k: cache[k] for k in keys if k in cache}
+    missing = [k for k in keys if k not in cache]
+    if missing:
+        out.update(ctx.broker.quotes(missing))
+    return out
+
+
 def snapshot_chain(ctx, symbol: str, expiry: date, d: Optional[date] = None,
-                   band: Optional[float] = 0.35) -> ChainSnapshot:
+                   band: Optional[float] = 0.35, quotes: Optional[Dict[str, Quote]] = None) -> ChainSnapshot:
     """Quote the futures, the stock and every option within `band` (fraction of spot) of the
-    money, and back out IVs from mid prices with Black-76 on the futures price."""
+    money, and back out IVs from mid prices with Black-76 on the futures price. `quotes` is an
+    optional prefetched cache (see prefetch_scan_quotes)."""
     d = d or ctx.clock.today()
     chain = inst.load_chain(ctx.engine, d, symbol, expiry)
     head = [chain.equity_key] + ([chain.future.key] if chain.future else [])
-    hq = ctx.broker.quotes(head)
+    hq = _quotes(ctx, head, quotes)
     spot_q = hq.get(chain.equity_key)
     spot = (spot_q.mid or spot_q.last) if spot_q else None
     fut_q = hq.get(chain.future.key) if chain.future else None
@@ -82,8 +125,9 @@ def snapshot_chain(ctx, symbol: str, expiry: date, d: Optional[date] = None,
     ref = fut or spot
     legs = [leg for leg in chain.legs.values()
             if band is None or ref is None or abs(leg.strike / ref - 1) <= band]
+    leg_quotes = _quotes(ctx, [leg.key for leg in legs], quotes)
     quotes = dict(hq)
-    quotes.update(ctx.broker.quotes([leg.key for leg in legs]))
+    quotes.update(leg_quotes)
     now = ctx.clock.now()
     T = years_to_expiry(expiry, now)
     a = ctx.cfg.analytics

@@ -237,6 +237,78 @@ def _cmd_sim(args: argparse.Namespace) -> int:
     return 0
 
 
+def apply_overrides(cfg, pairs):
+    """`section.key=value` overrides (YAML-parsed values), re-validated as a whole config."""
+    import yaml
+
+    from .config import Config
+
+    if not pairs:
+        return cfg
+    raw = cfg.model_dump()
+    for pair in pairs:
+        key, sep, val = pair.partition("=")
+        if not sep:
+            raise ConfigError(f"override {pair!r} must look like section.key=value")
+        node = raw
+        parts = key.strip().split(".")
+        for part in parts[:-1]:
+            if part not in node or not isinstance(node[part], dict):
+                raise ConfigError(f"unknown config section in override {key!r}")
+            node = node[part]
+        if parts[-1] not in node:
+            raise ConfigError(f"unknown config key in override {key!r}")
+        node[parts[-1]] = yaml.safe_load(val)
+    base_dir = raw.pop("base_dir", cfg.base_dir)
+    try:
+        return Config(**raw, base_dir=base_dir)
+    except Exception as exc:
+        raise ConfigError(f"invalid override: {exc}") from exc
+
+
+def _cmd_backtest(args: argparse.Namespace) -> int:
+    from .backtest import runner
+    from .backtest.broker import read_universe
+    from .backtest.dolthub import DoltHubClient, load_chains, load_reference
+    from .views import backtest_summary
+
+    cfg = load_config(args.config)
+    setup_logging(cfg.log_dir, level="WARNING" if not args.verbose else "INFO")
+    store = cfg.resolve(args.store)
+    universe = read_universe(Path(args.universe) if args.universe else runner.UNIVERSE_US)
+    start, end = date.fromisoformat(args.start), date.fromisoformat(args.end)
+    if args.action == "load":
+        from datetime import timedelta
+
+        client = DoltHubClient()
+        print(f"Loading {len(universe)} symbols from DoltHub into {store} ...", flush=True)
+        load_reference(client, store, list(universe), start - timedelta(days=600), end)
+        n = load_chains(client, store, list(universe), start, end,
+                        progress=lambda i, n: print(f"  chain batches {i}/{n}", end="\r", flush=True))
+        print(f"\nloaded {n:,} option quotes")
+        return 0
+    bt_cfg = apply_overrides(runner.us_config(cfg, capital=args.capital), args.set)
+    days = runner.trading_days(store, start, end)
+    if len(days) <= args.warmup:
+        print(f"only {len(days)} trading days with data in range; need more than the {args.warmup}-day warm-up")
+        return 1
+    db = Path(args.db) if args.db else cfg.resolve("data/backtest_us.db")
+    ctx = runner.make_context(bt_cfg, store, db, days[0], universe, notice_days=args.notice_days)
+    print(f"Backtest: {len(universe)} US stocks, {days[0]} to {days[-1]} ({len(days)} days, first {args.warmup} "
+          f"warm-up), capital ${bt_cfg.capital:,.0f}" + (f", overrides {args.set}" if args.set else ""), flush=True)
+    run = runner.run_backtest(ctx, days, args.warmup,
+                              progress=lambda i, n: print(f"  day {i}/{n}", end="\r", flush=True))
+    print()
+    print(backtest_summary(run))
+    if args.report:
+        from .reporting.weekly import write_report
+
+        out = write_report(ctx, days[-1], days=(days[-1] - days[args.warmup]).days + 1,
+                           out_dir=cfg.resolve(cfg.reporting.out_dir), name=f"backtest_us_{days[-1]}")
+        print(f"report: {out}")
+    return 0
+
+
 def _cmd_record(args: argparse.Namespace) -> int:
     from .recorder import record_fixtures
 
@@ -318,6 +390,21 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--db", help="report on a specific database (e.g. a simulation run)")
     sp.add_argument("--asof", help="YYYY-MM-DD (default: today, or the last equity date with --db)")
     sp.set_defaults(func=_cmd_report)
+
+    sp = sub.add_parser("backtest", help="replay real end-of-day US option data through the live code path")
+    sp.add_argument("action", choices=["load", "run"], help="load: download data from DoltHub; run: replay it")
+    sp.add_argument("--start", default="2024-01-02")
+    sp.add_argument("--end", default="2026-10-30")
+    sp.add_argument("--warmup", type=int, default=130, help="days of scanning without entries (IV history)")
+    sp.add_argument("--capital", type=float, default=100_000, help="starting capital in dollars")
+    sp.add_argument("--store", default="data/market_us.db", help="local market data store")
+    sp.add_argument("--universe", help="CSV of symbol,sector (default app/backtest/us_universe.csv)")
+    sp.add_argument("--db", help="trading database for this run (default data/backtest_us.db)")
+    sp.add_argument("--notice-days", type=int, default=14, help="days before an earnings date that it is known")
+    sp.add_argument("--set", action="append", default=[], metavar="SECTION.KEY=VALUE",
+                    help="override a threshold for this run, e.g. --set iv.min_iv_hv_ratio=1.15")
+    sp.add_argument("--report", action="store_true", help="write an HTML report for the trading period")
+    sp.set_defaults(func=_cmd_backtest)
 
     sp = sub.add_parser("record", help="save real Kite responses as offline test fixtures")
     sp.add_argument("symbols", nargs="+")

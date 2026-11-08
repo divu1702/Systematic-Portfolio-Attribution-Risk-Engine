@@ -41,13 +41,34 @@ def fetch_events(ctx) -> int:
         with ctx.engine.begin() as conn:
             conn.execute(insert(EventFetch).values(fetched_at=now, source="nse", ok=False, rows=0,
                                                    error=str(exc)[:500]))
+        load_imports(ctx)
         load_overrides(ctx)
         return 0
     _store(ctx.engine, rows, now)
     with ctx.engine.begin() as conn:
         conn.execute(insert(EventFetch).values(fetched_at=now, source="nse", ok=True, rows=len(rows)))
+    load_imports(ctx)
     load_overrides(ctx)
     return len(rows)
+
+
+def load_imports(ctx) -> int:
+    """Events from CSV exports in imports/events/; each file counts as a successful fetch made
+    when the file was saved."""
+    from .imports import scan_imports
+
+    folder = ctx.cfg.resolve(ctx.cfg.paths.imports) / "events"
+    n = 0
+    for path, saved_at, rows in scan_imports(folder):
+        _store(ctx.engine, rows, saved_at)
+        source = f"import:{path.name}"
+        with ctx.engine.begin() as conn:
+            seen = conn.execute(select(func.count()).select_from(EventFetch).where(
+                EventFetch.source == source, EventFetch.fetched_at == saved_at)).scalar()
+            if not seen:
+                conn.execute(insert(EventFetch).values(fetched_at=saved_at, source=source, ok=True, rows=len(rows)))
+        n += len(rows)
+    return n
 
 
 def load_overrides(ctx) -> int:

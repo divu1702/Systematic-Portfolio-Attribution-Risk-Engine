@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import logging
 import math
+import time as _time
 import zlib
 from collections import OrderedDict
 from dataclasses import asdict, dataclass, field
@@ -249,7 +250,8 @@ def evaluate_stock(ctx, symbol: str, today: date, cal: TradingCalendar, equity: 
         return reject("data", "HV20 unavailable")
 
     # IV snapshot for every universe stock, whatever happens next.
-    atm_snap = market.snapshot_chain(ctx, symbol, atm_exp, band=SCAN_BAND)
+    qcache = ctx.cache.get("scan_quotes")
+    atm_snap = market.snapshot_chain(ctx, symbol, atm_exp, band=SCAN_BAND, quotes=qcache)
     atm_iv = atm_snap.atm_iv
     if atm_iv is None:
         return reject("data", "could not compute ATM IV")
@@ -282,7 +284,8 @@ def evaluate_stock(ctx, symbol: str, today: date, cal: TradingCalendar, equity: 
         return reject("F5 cause passed", why5, 5)
     base.flags["f5"] = True
 
-    snap = atm_snap if trade_exp == atm_exp else market.snapshot_chain(ctx, symbol, trade_exp, band=SCAN_BAND)
+    snap = atm_snap if trade_exp == atm_exp else market.snapshot_chain(ctx, symbol, trade_exp, band=SCAN_BAND,
+                                                                       quotes=qcache)
     spot, F = snap.spot, snap.fut_price
     levels = load_levels(ctx.engine, symbol, today)
     side, level = choose_direction(levels, spot, atr, cfg.direction.max_dist_atr)
@@ -344,7 +347,7 @@ def evaluate_stock(ctx, symbol: str, today: date, cal: TradingCalendar, equity: 
                 c.flags["f8"] = False
                 c.reject_reason = "F8 credit/width: no credit at natural prices"
                 continue
-            costs = round_trip_costs(cfg.costs, qs.bid, ql.ask, lot)
+            costs = round_trip_costs(cfg.costs, qs.bid, ql.ask, lot, lot=lot)
             m = spread_metrics(side, k, long_k, qs.bid, ql.ask, lot, costs_per_share=costs / lot)
             c.credit_nat, c.width, c.max_loss, c.breakeven = m.credit, m.width, m.max_loss, m.breakeven
             c.inputs.update(round_trip_costs=costs, breakeven_win_rate=m.breakeven_win_rate)
@@ -421,6 +424,16 @@ def run_scan(ctx, persist: bool = True) -> ScanResult:
     outcomes: List[StockOutcome] = []
     snapshots: List[dict] = []
     in_universe = set(universe)
+    # One batched quote pass for the whole scan (see market.prefetch_scan_quotes).
+    def _expiries(sym):
+        exps = inst.expiries(ctx.engine, today, sym)
+        picks = {market.pick_expiry(exps, today, cfg.dte_min, cfg.dte_max),
+                 market.pick_expiry(exps, today, cfg.iv.atm_min_dte)}
+        return [e for e in picks if e]
+    t_q = _time.time()
+    ctx.cache["scan_quotes"] = market.prefetch_scan_quotes(ctx, [s for s in stocks if s in in_universe], today,
+                                                           _expiries, SCAN_BAND)
+    log.info("scan quotes: %d instruments in %.1fs", len(ctx.cache["scan_quotes"]), _time.time() - t_q)
     for sym in stocks:
         if sym not in in_universe:
             c = SpreadCandidate(sym, "", 0, 0, None, None, 0, flags=_flags_upto(1, False))
@@ -440,6 +453,7 @@ def run_scan(ctx, persist: bool = True) -> ScanResult:
             c = SpreadCandidate(sym, "", 0, 0, None, None, 0, flags=_flags_upto(1, True))
             c.reject_reason = f"data: error {exc}"
             outcomes.append(StockOutcome(sym, "data", f"error: {exc}", rows=[c]))
+    ctx.cache.pop("scan_quotes", None)          # never reuse a scan's quotes later
     ranked = sorted([o.best for o in outcomes if o.best], key=lambda c: c.ev_ratio, reverse=True)
     selected = ranked[: cfg.scan.top_n]
     result = ScanResult(scan_id, now, outcomes, ranked, selected)
@@ -450,6 +464,9 @@ def run_scan(ctx, persist: bool = True) -> ScanResult:
 
 
 def _persist(ctx, result: ScanResult, snapshots: List[dict]) -> None:
+    from ..data.configlog import record
+
+    chash = record(ctx)
     rows = []
     best_ids = {id(c) for c in result.ranked}
     for o in result.outcomes:
@@ -461,7 +478,7 @@ def _persist(ctx, result: ScanResult, snapshots: List[dict]) -> None:
                 max_loss=c.max_loss or None, p_market=c.p_market, p_model=c.p_model, ev=c.ev,
                 ev_ratio=c.ev_ratio if c.ev_ratio is None or math.isfinite(c.ev_ratio) else None,
                 **{f"{k}_pass": v for k, v in c.flags.items()},
-                accepted=id(c) in best_ids, reject_reason=c.reject_reason,
+                accepted=id(c) in best_ids, reject_reason=c.reject_reason, config_hash=chash,
                 inputs_json=json.dumps({**c.inputs, "short_sym": c.short_sym, "long_sym": c.long_sym,
                                         "best_of_stock": id(c) in best_ids}, default=str)))
     with ctx.engine.begin() as conn:
