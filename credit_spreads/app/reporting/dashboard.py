@@ -25,21 +25,24 @@ def _args():
     return a
 
 
-def load(db: str):
+def load(db: str, strategy: str = "main"):
+    """One book's data (main by default; a paper sleeve by name), plus the system state."""
     import pandas as pd
 
     conn = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
     try:
-        q = lambda sql: pd.read_sql_query(sql, conn)  # noqa: E731
+        q = lambda sql: pd.read_sql_query(sql, conn, params=(strategy,))  # noqa: E731
         return {
             "open": q("SELECT symbol, side, short_k, long_k, expiry, lots, entry_credit, max_loss, margin, mfe, mae, "
-                      "entry_ts FROM trades WHERE status='open' ORDER BY entry_ts"),
+                      "entry_ts FROM trades WHERE status='open' AND strategy=? ORDER BY entry_ts"),
             "closed": q("SELECT symbol, side, short_k, long_k, entry_ts, exit_ts, exit_reason, pnl_net, replayed, "
-                        "gap_flag FROM trades WHERE status='closed' ORDER BY exit_ts DESC LIMIT 50"),
-            "equity": q("SELECT date, equity, drawdown FROM equity ORDER BY date"),
+                        "gap_flag FROM trades WHERE status='closed' AND strategy=? ORDER BY exit_ts DESC LIMIT 50"),
+            "equity": q("SELECT date, equity, drawdown FROM equity WHERE strategy=? ORDER BY date"),
             "candidates": q("SELECT ts, symbol, side, short_k, long_k, expiry, credit_nat, width, max_loss, p_model, "
-                            "ev_ratio, accepted, reject_reason FROM candidates ORDER BY id DESC LIMIT 300"),
-            "state": q("SELECT key, value, updated_at FROM system_state"),
+                            "ev_ratio, accepted, reject_reason FROM candidates WHERE strategy=? ORDER BY id DESC LIMIT 300"),
+            "state": pd.read_sql_query("SELECT key, value, updated_at FROM system_state", conn),
+            "strategies": pd.read_sql_query("SELECT DISTINCT strategy FROM equity ORDER BY strategy = 'main' DESC, "
+                                            "strategy", conn),
         }
     finally:
         conn.close()
@@ -54,7 +57,9 @@ def main():  # pragma: no cover - rendered by streamlit
     if not Path(db).exists():
         st.error(f"Database not found: {db}")
         return
-    d = load(db)
+    names = list(load(db)["strategies"].strategy) or ["main"]
+    book = st.sidebar.selectbox("Book", names) if len(names) > 1 else "main"
+    d = load(db, book)
     if not d["state"].empty:
         st.warning("System state: " + "; ".join(f"{r.key}={r.value}" for r in d["state"].itertuples()))
     eq = d["equity"]

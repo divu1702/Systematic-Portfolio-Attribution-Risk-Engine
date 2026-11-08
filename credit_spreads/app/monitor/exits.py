@@ -51,8 +51,20 @@ def decide_exit(ctx, t: Trade, m: MarkResult, phase: str, cal: TradingCalendar,
     return None
 
 
+def trade_context(ctx, executor, t: Trade):
+    """(context with the trade's own strategy rules, executor for its book)."""
+    from ..execution.router import get_executor
+
+    main = ctx.parent or ctx
+    if t.strategy == "main":
+        return main, executor
+    tctx = main.for_strategy(t.strategy, missing_ok=True)
+    return tctx, get_executor(tctx)
+
+
 def run_monitor(ctx, executor, phase: str = REGULAR) -> List[str]:
-    """Mark every open spread and close those whose exit rule fires. Returns alert texts."""
+    """Mark every open spread of every book and close those whose exit rule (that book's rules)
+    fires. Returns alert texts."""
     if ctx.cfg.monitor.replay_missed:
         from .replay import catch_up
 
@@ -64,20 +76,22 @@ def run_monitor(ctx, executor, phase: str = REGULAR) -> List[str]:
     quotes = ctx.broker.quotes(quote_keys(trades))
     msgs = []
     for t in trades:
-        m = mark_trade(ctx, t, quotes)
+        tctx, ex = trade_context(ctx, executor, t)
+        tag = "" if t.strategy == "main" else f"[{t.strategy}] "
+        m = mark_trade(tctx, t, quotes)
         if not m.ok:
-            msgs.append(f"{t.symbol}: could not mark ({m.reason})")
+            msgs.append(f"{tag}{t.symbol}: could not mark ({m.reason})")
             continue
-        decision = decide_exit(ctx, t, m, phase, cal)
+        decision = decide_exit(tctx, t, m, phase, cal)
         if not decision:
             continue
         reason, gap = decision
-        res = executor.close_spread(t, quotes, reason, gap=gap)
+        res = ex.close_spread(t, quotes, reason, gap=gap)
         if res.ok:
-            msgs.append(f"EXIT {t.symbol} {t.side.replace('_', ' ')} {t.short_k:g}/{t.long_k:g}: {reason}, "
+            msgs.append(f"{tag}EXIT {t.symbol} {t.side.replace('_', ' ')} {t.short_k:g}/{t.long_k:g}: {reason}, "
                         f"net P&L {inr(res.pnl_net)}{' (gap)' if gap else ''}")
         else:
-            msgs.append(f"EXIT FAILED {t.symbol}: {res.reason}")
+            msgs.append(f"{tag}EXIT FAILED {t.symbol}: {res.reason}")
     for msg in msgs:
-        ctx.notifier.send(msg, "exit" if msg.startswith("EXIT") else "warning")
+        ctx.notifier.send(msg, "exit" if "EXIT " in msg and "EXIT FAILED" not in msg else "warning")
     return msgs

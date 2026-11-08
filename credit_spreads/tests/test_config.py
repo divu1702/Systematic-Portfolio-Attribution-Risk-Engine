@@ -31,7 +31,8 @@ def test_pydantic_defaults_match_shipped_file():
     """config.yaml and the model defaults should not drift apart."""
     shipped = load_config()
     defaults = Config(base_dir=shipped.base_dir)
-    assert shipped.model_dump() == defaults.model_dump()
+    assert shipped.model_dump(exclude={"strategies"}) == defaults.model_dump(exclude={"strategies"})
+    assert all(shipped.for_strategy(n) for n in shipped.strategy_names)     # shipped paper sleeves are valid
 
 
 def test_paths_resolve_relative_to_config_file(cfg, tmp_path):

@@ -25,7 +25,7 @@ pip install -r requirements.txt
 cp .env.example .env          # type your Kite key/secret and Telegram token here; never commit .env
 python -m app migrate         # creates data/trading.db
 python -m app doctor          # config, secrets (set/missing only), database status
-python -m pytest              # ~200 offline tests
+python -m pytest              # ~230 offline tests
 ```
 
 ## Daily use
@@ -215,6 +215,38 @@ rest at the time stop. EV is the average P&L after costs and the cost of crossin
 close; p_model is the share of paths that make money. A spread needs EV > 0 and EV >= 3% of max loss.
 IV is held at its entry level in the simulation, so any fall in IV after entry is upside it ignores.
 
+## Strategies side by side (paper sleeves)
+
+The main rules in `config.yaml` form the **main book**, the only one that can ever go live. Each entry
+under `strategies:` is a **paper sleeve**: the main rules with some settings overridden, evaluated
+on the same scan in its own paper book, with its own capital, risk limits, exits, equity curve and
+drawdown pause. The manual kill switch stops every book. The shipped sleeve, `v2`, is the draft
+from the research review:
+- richness from IV percentile alone (no IV/HV test);
+- the "shock has passed" timing rule;
+- direction from the 50-day trend instead of support/resistance;
+- 0.15-0.25 delta shorts with 3-4% wings, keeping 75% of the credit before taking profit;
+- no thesis stop.
+
+The scanner is built in layers so sleeves can differ in logic, not only in numbers:
+
+| Layer | File | Per | What |
+|---|---|---|---|
+| Signals | `strategy/signals.py` | stock, shared | bars, ATM IV and percentile, levels, averages, recent moves, chains |
+| Entry rules | `strategy/rules.py` | strategy | DTE, F2, F3 (0 = off), F4, F5 timing (`iv.timing`), direction (`direction.method`) |
+| Structures | `strategy/structures.py` | strategy | strikes (F6, F7), wings (`spread.wing`: steps or % of spot), F8, F9, sizing, EV |
+| Risk | `risk/` | book | limits, kill switches, equity and drawdown pause per book |
+
+```bash
+python -m app doctor                       # lists each sleeve and what it changes
+python -m app status                       # every book's equity, entry status and open spreads
+python -m app report --strategy all        # one weekly report per book, each with a comparison table
+python -m app resume --drawdown --strategy v2
+```
+
+Alerts from a sleeve are prefixed with its name, e.g. `[v2] ENTRY ...`. Removing a sleeve from the
+config stops its new entries; its open spreads are still managed, under the main rules.
+
 ## Configuration
 
 Every threshold is in `config.yaml`, validated on load; unknown keys are an error. Keys marked `# +` are
@@ -229,7 +261,7 @@ app/
   broker/     base.py kite.py login.py mock.py synthetic.py
   data/       db.py models.py migrations/ instruments.py nse.py events.py daily.py levels_store.py refdata.py ...
   analytics/  black76.py vol.py levels.py
-  strategy/   scanner.py spreads.py costs.py ev.py
+  strategy/   scanner.py signals.py rules.py structures.py candidates.py spreads.py costs.py ev.py
   risk/       sizing.py limits.py equity.py
   execution/  paper.py entries.py router.py
   monitor/    marks.py exits.py replay.py

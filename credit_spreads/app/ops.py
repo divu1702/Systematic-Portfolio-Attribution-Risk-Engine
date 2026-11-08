@@ -45,16 +45,30 @@ def heartbeat(ctx, equity_point) -> Optional[str]:
     from .data.models import Candidate, Trade
     from .risk.limits import kill_switches, open_trades
 
+    from .risk.sizing import current_equity
+
     start = datetime.combine(ctx.clock.today(), time(0))
+
+    def counts(name):
+        with ctx.engine.connect() as conn:
+            accepted = conn.execute(select(func.count()).select_from(Candidate).where(
+                Candidate.ts >= start, Candidate.accepted.is_(True), Candidate.strategy == name)).scalar()
+            opened = conn.execute(select(func.count()).select_from(Trade).where(
+                Trade.entry_ts >= start, Trade.strategy == name)).scalar()
+            closed = conn.execute(select(func.count()).select_from(Trade).where(
+                Trade.exit_ts >= start, Trade.strategy == name)).scalar()
+        return accepted, opened, closed
+
     with ctx.engine.connect() as conn:
         scanned = conn.execute(select(func.count(func.distinct(Candidate.symbol))).where(Candidate.ts >= start)).scalar()
-        accepted = conn.execute(select(func.count()).select_from(Candidate).where(
-            Candidate.ts >= start, Candidate.accepted.is_(True))).scalar()
-        opened = conn.execute(select(func.count()).select_from(Trade).where(Trade.entry_ts >= start)).scalar()
-        closed = conn.execute(select(func.count()).select_from(Trade).where(Trade.exit_ts >= start)).scalar()
+    accepted, opened, closed = counts("main")
     blocks = kill_switches(ctx, equity_point.equity)
     msg = (f"EOD {ctx.clock.today()}: equity {inr(equity_point.equity)} (drawdown {equity_point.drawdown:.1%}), "
-           f"{len(open_trades(ctx.engine))} open; today scanned {scanned}, accepted {accepted}, opened {opened}, "
+           f"{len(open_trades(ctx.engine, 'main'))} open; today scanned {scanned}, accepted {accepted}, opened {opened}, "
            f"closed {closed}." + (f" Entries blocked: {'; '.join(blocks)}" if blocks else ""))
+    for book in ctx.books()[1:]:              # paper sleeves, one line each
+        a, o, c = counts(book.strategy)
+        msg += (f"\n[{book.strategy}] equity {inr(current_equity(book))}, {len(open_trades(ctx.engine, book.strategy))} "
+                f"open; accepted {a}, opened {o}, closed {c}.")
     ctx.notifier.send(msg, "info")
     return msg

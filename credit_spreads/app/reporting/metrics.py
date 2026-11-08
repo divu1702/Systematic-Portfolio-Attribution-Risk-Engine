@@ -16,8 +16,12 @@ from ..data.models import Candidate, Equity, Order, Trade
 from ..strategy.scanner import STAGES  # noqa: E402  (single source of truth for the funnel order)
 
 
-def closed_trades(engine, start: Optional[date] = None, end: Optional[date] = None) -> List[Trade]:
+def closed_trades(engine, start: Optional[date] = None, end: Optional[date] = None,
+                  strategy: Optional[str] = "main") -> List[Trade]:
+    """Closed trades of one strategy's book (None = every book)."""
     q = select(Trade).where(Trade.status == "closed")
+    if strategy is not None:
+        q = q.where(Trade.strategy == strategy)
     if start:
         q = q.where(Trade.exit_ts >= datetime.combine(start, time(0)))
     if end:
@@ -26,14 +30,17 @@ def closed_trades(engine, start: Optional[date] = None, end: Optional[date] = No
         return list(s.scalars(q.order_by(Trade.exit_ts)))
 
 
-def all_trades(engine) -> List[Trade]:
+def all_trades(engine, strategy: Optional[str] = "main") -> List[Trade]:
+    q = select(Trade)
+    if strategy is not None:
+        q = q.where(Trade.strategy == strategy)
     with Session(engine) as s:
-        return list(s.scalars(select(Trade).order_by(Trade.entry_ts)))
+        return list(s.scalars(q.order_by(Trade.entry_ts)))
 
 
-def equity_series(engine) -> List[Equity]:
+def equity_series(engine, strategy: str = "main") -> List[Equity]:
     with Session(engine) as s:
-        return list(s.scalars(select(Equity).order_by(Equity.date)))
+        return list(s.scalars(select(Equity).where(Equity.strategy == strategy).order_by(Equity.date)))
 
 
 @dataclass
@@ -101,9 +108,9 @@ def is_monotonic(rows: List[dict]) -> Optional[bool]:
     return all(y >= x - 1e-12 for x, y in zip(a, a[1:]))
 
 
-def go_live(engine, capital: float, trades: Optional[List[Trade]] = None) -> List[Metric]:
-    trades = closed_trades(engine) if trades is None else trades
-    eq = equity_series(engine)
+def go_live(engine, capital: float, trades: Optional[List[Trade]] = None, strategy: str = "main") -> List[Metric]:
+    trades = closed_trades(engine, strategy=strategy) if trades is None else trades
+    eq = equity_series(engine, strategy)
     n = len(trades)
     out: List[Metric] = []
     span_days = (max(t.exit_ts for t in trades) - min(t.entry_ts for t in trades)).days if trades else 0
@@ -178,9 +185,11 @@ def splits(trades: List[Trade]) -> Dict[str, List[dict]]:
     ])
 
 
-def funnel(engine, start: Optional[datetime] = None, end: Optional[datetime] = None) -> "OrderedDict[str, int]":
-    """Stock-scans removed at each stage (first failing stage per stock per scan)."""
-    q = select(Candidate.scan_id, Candidate.symbol, Candidate.reject_reason, Candidate.accepted)
+def funnel(engine, start: Optional[datetime] = None, end: Optional[datetime] = None,
+           strategy: str = "main") -> "OrderedDict[str, int]":
+    """Stock-scans removed at each stage (first failing stage per stock per scan), for one book."""
+    q = select(Candidate.scan_id, Candidate.symbol, Candidate.reject_reason, Candidate.accepted).where(
+        Candidate.strategy == strategy)
     if start:
         q = q.where(Candidate.ts >= start)
     if end:
@@ -198,6 +207,29 @@ def funnel(engine, start: Optional[datetime] = None, end: Optional[datetime] = N
         if idx >= 0:
             out[STAGES[idx]] += 1
     return out
+
+
+def book_summary(engine, strategy: str, capital: float) -> dict:
+    """One book's headline numbers, for comparing strategies side by side."""
+    closed = closed_trades(engine, strategy=strategy)
+    n_open = sum(1 for t in all_trades(engine, strategy) if t.status == "open")
+    eq = equity_series(engine, strategy)
+    wins = [t.pnl_net for t in closed if t.pnl_net > 0]
+    losses = [t.pnl_net for t in closed if t.pnl_net <= 0]
+    gross_loss = -sum(losses)
+    return {"strategy": strategy, "closed": len(closed), "open": n_open,
+            "win_rate": len(wins) / len(closed) if closed else None,
+            "breakeven_win_rate": (sum(t.breakeven_wr for t in closed if t.breakeven_wr is not None) /
+                                   max(1, sum(1 for t in closed if t.breakeven_wr is not None))) if closed else None,
+            "net": sum(t.pnl_net for t in closed),
+            "profit_factor": (sum(wins) / gross_loss) if gross_loss > 0 else None,
+            "equity": eq[-1].equity if eq else capital,
+            "max_drawdown": max((e.drawdown for e in eq), default=0.0)}
+
+
+def compare_books(ctx) -> List[dict]:
+    """book_summary for the main book and every paper sleeve."""
+    return [book_summary(b.engine, b.strategy, b.cfg.capital) for b in ctx.books()]
 
 
 def mae_multiples(trades: List[Trade]) -> List[float]:

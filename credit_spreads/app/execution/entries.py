@@ -18,45 +18,64 @@ log = logging.getLogger(__name__)
 
 
 def enter_from_scan(ctx, executor, result) -> List[str]:
+    """Each book enters its own top candidates through its own limits. `executor` serves the main
+    book; paper sleeves always use a paper executor."""
+    from .router import get_executor
+
+    main = ctx.parent or ctx
+    books = getattr(result, "books", None) or {}
+    if not books:
+        return _enter_book(main, executor, result.selected)
     msgs: List[str] = []
-    if not result.selected:
+    for name, book in books.items():
+        bctx = main.for_strategy(name)
+        book.entry_messages = _enter_book(bctx, executor if name == "main" else get_executor(bctx), book.selected)
+        msgs += book.entry_messages
+    result.entry_messages = msgs
+    return msgs
+
+
+def _enter_book(ctx, executor, selected) -> List[str]:
+    msgs: List[str] = []
+    if not selected:
         return msgs
+    tag = "" if ctx.strategy == "main" else f"[{ctx.strategy}] "
     equity = current_equity(ctx)
     blocks = kill_switches(ctx, equity)
     if blocks:
-        msg = f"Entries blocked ({len(result.selected)} candidate(s)): " + "; ".join(blocks)
+        msg = f"{tag}Entries blocked ({len(selected)} candidate(s)): " + "; ".join(blocks)
         ctx.notifier.send(msg, "risk")
         return [msg]
-    for cand in result.selected:
-        open_ = open_trades(ctx.engine)
+    for cand in selected:
+        open_ = open_trades(ctx.engine, ctx.strategy)
         sector = refdata.sector_of(ctx.engine, cand.symbol)
         keys = [f"NFO:{cand.short_sym}", f"NFO:{cand.long_sym}"]
         quotes = ctx.broker.quotes(keys)
         stale = stale_quotes(ctx, quotes) if len(quotes) == 2 else keys
         if stale:
-            msgs.append(f"REJECTED {cand.symbol}: stale or missing quotes for {', '.join(stale)}")
+            msgs.append(f"{tag}REJECTED {cand.symbol}: stale or missing quotes for {', '.join(stale)}")
             continue
         margin_lot = _margin_per_lot(ctx, cand, quotes)
         lots, violations = size_and_check(ctx, cand, sector, margin_lot, open_, equity)
         if violations or lots <= 0:
-            msgs.append(f"REJECTED {cand.symbol} {cand.side.replace('_', ' ')}: " + "; ".join(violations))
+            msgs.append(f"{tag}REJECTED {cand.symbol} {cand.side.replace('_', ' ')}: " + "; ".join(violations))
             continue
         chain = load_chain(ctx.engine, ctx.clock.today(), cand.symbol, cand.expiry)
         res = executor.open_spread(cand, lots, quotes, {"cp": option_type(cand.side), "tick": chain.tick_size,
                                                         "sector": sector})
         if not res.ok:
-            msgs.append(f"REJECTED {cand.symbol}: {res.reason}")
+            msgs.append(f"{tag}REJECTED {cand.symbol}: {res.reason}")
             continue
         max_loss = (cand.width - res.credit) * lots * cand.lot_size
         risk = risk_per_lot(ctx.cfg, res.credit, cand.width, cand.lot_size) * lots
         msgs.append(
-            f"ENTRY {cand.symbol} {cand.side.replace('_', ' ')} {cand.short_k:g}/{cand.long_k:g} {cand.expiry} "
+            f"{tag}ENTRY {cand.symbol} {cand.side.replace('_', ' ')} {cand.short_k:g}/{cand.long_k:g} {cand.expiry} "
             f"x{lots} lot(s) of {cand.lot_size}: credit {res.credit:.2f}/share "
             f"({inr(res.credit * lots * cand.lot_size)}), risk at stop {inr(risk)}, max loss (gap) {inr(max_loss)}, "
             f"margin {inr(res.margin)}"
             f"{' [margin fallback]' if res.margin_fallback else ''}, p_model {cand.p_model:.0%}")
     for m in msgs:
-        ctx.notifier.send(m, "entry" if m.startswith("ENTRY") else "rejection")
+        ctx.notifier.send(m, "entry" if m[len(tag):].startswith("ENTRY") else "rejection")
     return msgs
 
 

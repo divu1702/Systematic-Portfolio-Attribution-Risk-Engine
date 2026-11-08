@@ -5,6 +5,23 @@ Each entry names the keys changed, old and new values, and the evidence.
 
 ## Unreleased
 
+### Strategies side by side (owner-approved restructure, 8 Nov 2026)
+- The scanner is split into layers: shared signals per stock (`strategy/signals.py`), entry rules per
+  strategy (`strategy/rules.py`), spread construction per strategy (`strategy/structures.py`), and the
+  risk layer per book. The main rules behave exactly as before.
+- Paper sleeves (`strategies:` in config.yaml): the main rules with overrides, each in its own paper
+  book (own capital, limits, exits, equity, drawdown pause, config hash). Always paper. Candidates,
+  trades and equity carry a `strategy` column (migration 0007; existing rows belong to `main`).
+- New logic options: `iv.timing` (cause_passed | shock_passed | off), F3 off at `iv.min_iv_hv_ratio: 0`,
+  `direction.method` (levels | trend, `trend_days`), `spread.wing` (steps | pct, `wing_pct`, `wing_tolerance`).
+- Shipped sleeve `v2` (the research review's draft). Its wings are 3-4% of spot, not the 5-6% the US study
+  favoured: with ~Rs 6-7 lakh per lot, one lot of a 5-6% spread risks more than the 5% per-trade gap cap on
+  Rs 5 lakh. Its profit target keeps 75% of the credit (`exit.tp_frac: 0.25`; tp_frac is the cost to close
+  as a share of the credit).
+- Reports per book: `status`, scan output, heartbeat, weekly report (`report --strategy NAME|all`, with a
+  side-by-side table), simulation and backtest summaries, dashboard (book selector);
+  `resume --drawdown --strategy NAME`.
+
 ### Market-independent fixes from the research review (owner-approved, 8 Nov 2026)
 These follow from option maths and trading costs, not from fitting US data; the spec's behaviour is one
 setting away.

@@ -77,7 +77,7 @@ svg .hit:hover { fill: var(--text-primary); opacity: 0.05; }
 <body>
 <main>
   <h1>{{ 'Backtest report' if banner else 'Weekly paper-trading report' }}</h1>
-  <div class="sub">{{ start }} to {{ asof }} &middot; mode {{ mode|upper }} &middot; generated {{ generated.strftime('%Y-%m-%d %H:%M') }} IST</div>
+  <div class="sub">{% if strategy != 'main' %}Paper sleeve <strong>{{ strategy }}</strong> &middot; {% endif %}{{ start }} to {{ asof }} &middot; mode {{ mode|upper }} &middot; generated {{ generated.strftime('%Y-%m-%d %H:%M') }} IST</div>
   {% if banner %}<div class="banner"><strong>Backtest.</strong> {{ banner }}</div>
   {% elif mock %}<div class="banner"><strong>Synthetic market.</strong> These results come from the offline simulator. They test the machinery and say nothing about real edge.</div>{% endif %}
 
@@ -88,6 +88,23 @@ svg .hit:hover { fill: var(--text-primary); opacity: 0.05; }
     <div class="tile"><div class="k">Open spreads</div><div class="v">{{ open_trades|length }}</div></div>
     <div class="tile"><div class="k">Win rate vs breakeven</div><div class="v">{% if win_rate is not none %}{{ '%.0f'|format(win_rate*100) }}% / {{ '%.0f'|format((be_avg or 0)*100) }}%{% else %}-{% endif %}</div></div>
   </div>
+
+  {% if books %}
+  <div class="card">
+    <h2>Strategies side by side</h2>
+    <p class="muted">Each strategy is a separate paper book with its own capital and limits; only the main book can ever go live.</p>
+    <table>
+      <tr><th>Strategy</th><th class="r">Closed</th><th class="r">Open</th><th class="r">Win rate</th><th class="r">Breakeven</th><th class="r">Net P&amp;L</th><th class="r">Profit factor</th><th class="r">Equity</th><th class="r">Max drawdown</th></tr>
+      {% for b in books %}
+      <tr><td>{{ b.strategy }}{% if b.strategy == strategy %} (this report){% endif %}</td><td class="r">{{ b.closed }}</td><td class="r">{{ b.open }}</td>
+        <td class="r">{% if b.win_rate is not none %}{{ '%.0f'|format(b.win_rate*100) }}%{% else %}-{% endif %}</td>
+        <td class="r">{% if b.breakeven_win_rate is not none %}{{ '%.0f'|format(b.breakeven_win_rate*100) }}%{% else %}-{% endif %}</td>
+        <td class="r">{{ b.net|inr }}</td><td class="r">{% if b.profit_factor is not none %}{{ '%.2f'|format(b.profit_factor) }}{% else %}-{% endif %}</td>
+        <td class="r">{{ b.equity|inr }}</td><td class="r">{{ '%.1f'|format(b.max_drawdown*100) }}%</td></tr>
+      {% endfor %}
+    </table>
+  </div>
+  {% endif %}
 
   <div class="card">
     <h2>Go-live scorecard</h2>

@@ -17,9 +17,13 @@ from ..data.models import Order, Trade
 from .sizing import current_equity, lots_for, plan_lots
 
 
-def open_trades(engine) -> List[Trade]:
+def open_trades(engine, strategy: Optional[str] = None) -> List[Trade]:
+    """Open spreads of one strategy's book, or of every book when `strategy` is None."""
+    q = select(Trade).where(Trade.status == "open")
+    if strategy is not None:
+        q = q.where(Trade.strategy == strategy)
     with Session(engine) as s:
-        return list(s.scalars(select(Trade).where(Trade.status == "open").order_by(Trade.entry_ts)))
+        return list(s.scalars(q.order_by(Trade.entry_ts)))
 
 
 def position_risk(t) -> float:
@@ -27,11 +31,14 @@ def position_risk(t) -> float:
     return t.risk if getattr(t, "risk", None) else t.max_loss
 
 
-def realised_today(engine, day) -> float:
+def realised_today(engine, day, strategy: Optional[str] = None) -> float:
     start = datetime.combine(day, time(0))
+    q = select(func.sum(Trade.pnl_net)).where(Trade.status == "closed", Trade.exit_ts >= start,
+                                              Trade.exit_ts < start + timedelta(days=1))
+    if strategy is not None:
+        q = q.where(Trade.strategy == strategy)
     with engine.connect() as conn:
-        v = conn.execute(select(func.sum(Trade.pnl_net)).where(Trade.status == "closed", Trade.exit_ts >= start,
-                                                              Trade.exit_ts < start + timedelta(days=1))).scalar()
+        v = conn.execute(q).scalar()
     return float(v or 0.0)
 
 
@@ -43,15 +50,18 @@ def rejections_today(engine, day) -> int:
 
 
 def kill_switches(ctx, equity: Optional[float] = None) -> List[str]:
-    """Reasons new entries are blocked right now (empty list = entries allowed)."""
+    """Reasons new entries into this context's book are blocked right now (empty = allowed). The
+    kill switch, opening window and rejection count apply to every book; the drawdown pause and
+    the daily loss stop to each book separately."""
     cfg, now = ctx.cfg, ctx.clock.now()
     out = []
     if (r := state.flag(ctx.engine, state.KILLED)):
         out.append(f"kill switch: {r}")
-    if (r := state.flag(ctx.engine, state.DD_PAUSED)):
-        out.append(f"drawdown pause: {r} (reset manually with `python -m app resume --drawdown`)")
+    if (r := state.flag(ctx.engine, state.dd_key(ctx.strategy))):
+        how = "" if ctx.strategy == "main" else f" --strategy {ctx.strategy}"
+        out.append(f"drawdown pause: {r} (reset manually with `python -m app resume --drawdown{how}`)")
     equity = current_equity(ctx) if equity is None else equity
-    lost = -realised_today(ctx.engine, now.date())
+    lost = -realised_today(ctx.engine, now.date(), ctx.strategy)
     if lost >= cfg.risk.daily_stop * equity:
         out.append(f"daily loss stop: realised loss today {lost:,.0f} >= {cfg.risk.daily_stop:.0%} of equity")
     s = cfg.schedule

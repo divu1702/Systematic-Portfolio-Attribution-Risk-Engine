@@ -12,11 +12,34 @@ from app.data.models import Base, Candidate, Trade
 def test_fresh_database_is_migrated_and_idempotent(tmp_path):
     db = tmp_path / "t.db"
     applied = migrations.upgrade(db)
-    assert [m.version for m in applied] == [1, 2, 3, 4, 5, 6]
+    assert [m.version for m in applied] == [1, 2, 3, 4, 5, 6, 7]
     assert migrations.upgrade(db) == []
     st = db_status(db)
-    assert st["version"] == st["latest"] == 6
+    assert st["version"] == st["latest"] == 7
     assert all(n == 0 for n in st["tables"].values())
+
+
+def test_strategy_migration_keeps_existing_rows_in_the_main_book(tmp_path):
+    import shutil
+
+    old = tmp_path / "v6"
+    old.mkdir()
+    for m in migrations.discover()[:6]:
+        shutil.copy(m.path, old / m.path.name)
+    db = tmp_path / "t.db"
+    migrations.upgrade(db, old)
+    conn = sqlite3.connect(db)
+    conn.execute("INSERT INTO equity VALUES ('2026-11-02', 501000, 1000, 0, 0, 501000, 0)")
+    conn.execute("INSERT INTO trades (trade_id, mode, status, symbol, side, expiry, legs_json, lots, lot_size, "
+                 "entry_ts, entry_credit, costs, max_loss) VALUES ('T1', 'paper', 'open', 'X', 'bull_put', "
+                 "'2026-11-24', '[]', 1, 100, '2026-11-02 15:00:00', 2.0, 40, 800)")
+    conn.commit()
+    conn.close()
+    assert [m.version for m in migrations.upgrade(db)] == [7]
+    conn = sqlite3.connect(db)
+    assert conn.execute("SELECT strategy, equity FROM equity").fetchall() == [("main", 501000.0)]
+    assert conn.execute("SELECT strategy FROM trades").fetchall() == [("main",)]
+    conn.close()
 
 
 def test_migrated_schema_matches_orm_models(tmp_path):

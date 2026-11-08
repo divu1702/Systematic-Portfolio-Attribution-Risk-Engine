@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import Annotated, List, Literal, Optional
+from typing import Annotated, Any, Dict, List, Literal, Optional, Tuple
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
@@ -55,7 +55,7 @@ class EventsCfg(_Section):
 
 
 class IVCfg(_Section):
-    min_iv_hv_ratio: Annotated[float, Field(gt=0)] = 1.25
+    min_iv_hv_ratio: NonNegFloat = 1.25        # F3; 0 = off
     min_ivp: Percentile = 70
     ivp_history_days: PosInt = 252
     ivp_min_history: PosInt = 120
@@ -63,6 +63,12 @@ class IVCfg(_Section):
     spike_lookback: PosInt = 10
     spike_move_atr: Annotated[float, Field(gt=0)] = 1.5
     atm_min_dte: NonNegInt = 10
+    # F5 timing. "cause_passed" (spec): IV rose from below the F4 threshold within spike_lookback
+    # sessions after a price move or event. "shock_passed" (research review): no move of
+    # spike_move_atr x ATR in the last calm_days sessions, and their realised volatility below IV.
+    # "off": no timing rule.
+    timing: Literal["cause_passed", "shock_passed", "off"] = "cause_passed"
+    calm_days: Annotated[int, Field(ge=2, le=60)] = 5
 
     @model_validator(mode="after")
     def _history(self) -> "IVCfg":
@@ -82,7 +88,12 @@ class LevelsCfg(_Section):
 
 
 class DirectionCfg(_Section):
+    # "levels" (spec): bull put near a support, bear call near a resistance (max_dist_atr); the level
+    # also anchors F6 and the thesis stop. "trend": bull put above the trend_days average, bear call
+    # below it; the average is the thesis-stop reference and F6 does not apply.
+    method: Literal["levels", "trend"] = "levels"
     max_dist_atr: Annotated[float, Field(gt=0)] = 1.5
+    trend_days: Annotated[int, Field(ge=5, le=250)] = 50
 
 
 class StrikesCfg(_Section):
@@ -98,7 +109,12 @@ class StrikesCfg(_Section):
 
 
 class SpreadCfg(_Section):
+    # Long leg: "steps" = widths_steps strikes beyond the short; "pct" = the listed strike nearest
+    # each wing_pct x spot beyond it (within wing_tolerance of that distance).
+    wing: Literal["steps", "pct"] = "steps"
     widths_steps: List[PosInt] = Field(default_factory=lambda: [1, 2, 3, 4], min_length=1)
+    wing_pct: List[Fraction] = Field(default_factory=lambda: [0.05], min_length=1)
+    wing_tolerance: Fraction = 0.35
     # F8. "friction" (owner-approved fix, Nov 2026): the net credit after all charges must be at least
     # `min_credit_friction` x the cost of crossing both legs' bid-ask to close, and at least
     # `min_credit_ticks` ticks. "width" is the spec's rule: credit >= min_credit_width x width, which
@@ -176,7 +192,7 @@ class ReportingCfg(_Section):
 
 class ExitCfg(_Section):
     stop_mult: Annotated[float, Field(gt=1)] = 2.0
-    tp_frac: Fraction = 0.50
+    tp_frac: Fraction = 0.50                  # profit target: cost to close <= tp_frac x credit (0.25 = keep 75%)
     days_before_expiry: NonNegInt = 5
     thesis_stop: bool = True
     on_new_event: bool = True
@@ -352,6 +368,51 @@ class PathsCfg(_Section):
     fixtures: str = "fixtures"
 
 
+# Keys a strategy may override: decision rules and its own book. Signal inputs shared by every
+# strategy (instrument data, levels computation, IV history, analytics) come from the main config.
+STRATEGY_KEYS = {"capital", "universe", "dte_min", "dte_max", "events", "iv", "levels", "direction", "strikes",
+                 "spread", "ev", "liquidity", "scan", "exit", "risk", "paper"}
+SHARED_SUBKEYS = {"iv": {"ivp_history_days", "ivp_min_history", "atm_min_dte"},
+                  "levels": {"fractal_n", "lookback", "cluster_atr", "recency_halflife", "weekly_weight",
+                             "manual_score"}}
+_STRATEGY_NAME = re.compile(r"^[a-z][a-z0-9_]{0,23}$")
+MAIN = "main"
+
+
+class StrategyCfg(_Section):
+    """A paper sleeve: the main rules with `overrides`, run side by side in its own paper book
+    (its own capital, limits, equity and drawdown pause). Never traded live."""
+    name: str
+    description: str = ""
+    overrides: Dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("name")
+    @classmethod
+    def _name(cls, v: str) -> str:
+        if not _STRATEGY_NAME.match(v) or v == MAIN:
+            raise ValueError(f"strategy name {v!r}: lowercase letters, digits and _, up to 24, not {MAIN!r}")
+        return v
+
+    @field_validator("overrides")
+    @classmethod
+    def _keys(cls, v: Dict[str, Any]) -> Dict[str, Any]:
+        bad = sorted(set(v) - STRATEGY_KEYS)
+        if bad:
+            raise ValueError(f"cannot override {', '.join(bad)} per strategy (allowed: {', '.join(sorted(STRATEGY_KEYS))})")
+        for section, shared in SHARED_SUBKEYS.items():
+            clash = sorted(set(v.get(section) or {}) & shared)
+            if clash:
+                raise ValueError(f"{section}.{', '.join(clash)} are shared signal inputs, set in the main config")
+        return v
+
+
+def _deep_merge(base: dict, over: dict) -> dict:
+    out = dict(base)
+    for k, v in over.items():
+        out[k] = _deep_merge(out[k], v) if isinstance(v, dict) and isinstance(out.get(k), dict) else v
+    return out
+
+
 class Config(_Section):
     mode: Literal["paper", "live"] = "paper"
     capital: Annotated[float, Field(gt=0)] = 500_000
@@ -383,6 +444,7 @@ class Config(_Section):
     snapshots: SnapshotCfg = SnapshotCfg()
     ops: OpsCfg = OpsCfg()
     paths: PathsCfg = PathsCfg()
+    strategies: List[StrategyCfg] = Field(default_factory=list)   # paper sleeves beside the main rules
 
     # Directory the config file was loaded from; relative paths resolve against it.
     base_dir: Path = Field(default=PROJECT_ROOT, exclude=True)
@@ -394,14 +456,39 @@ class Config(_Section):
         if self.exit.days_before_expiry >= self.dte_min:
             raise ValueError("exit.days_before_expiry must be below dte_min, or every trade "
                              "would hit the time stop on entry")
+        names = [s.name for s in self.strategies]
+        if len(set(names)) != len(names):
+            raise ValueError("strategy names must be unique")
+        for s in self.strategies:
+            try:
+                self.for_strategy(s.name)
+            except ValidationError as exc:
+                raise ValueError(f"strategy {s.name!r} overrides are invalid:\n{_format_errors(exc)}") from None
         return self
+
+    @property
+    def strategy_names(self) -> List[str]:
+        return [MAIN] + [s.name for s in self.strategies]
+
+    def for_strategy(self, name: str) -> "Config":
+        """The rules of one strategy: the main config, or the main config with a sleeve's overrides
+        (always paper mode, no nested sleeves)."""
+        if name == MAIN:
+            return self
+        s = next((s for s in self.strategies if s.name == name), None)
+        if s is None:
+            raise KeyError(f"no strategy named {name!r} (have: {', '.join(self.strategy_names)})")
+        base = self.model_dump(exclude={"base_dir", "strategies"})
+        merged = _deep_merge(base, s.overrides)
+        merged["mode"] = "paper"
+        return Config(**merged, base_dir=self.base_dir)
 
     def strategy_hash(self) -> str:
         """Short hash of everything that can change a trading decision (paths and ops excluded)."""
         import hashlib
         import json
 
-        data = self.model_dump(mode="json", exclude={"base_dir", "paths", "ops"})
+        data = self.model_dump(mode="json", exclude={"base_dir", "paths", "ops", "strategies"})
         return hashlib.sha256(json.dumps(data, sort_keys=True).encode()).hexdigest()[:12]
 
     def resolve(self, relative: str) -> Path:

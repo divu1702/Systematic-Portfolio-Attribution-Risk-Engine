@@ -20,7 +20,7 @@ events:
   results_cycle_days: 91     # +
   results_tolerance_days: 10 # +
 iv:
-  min_iv_hv_ratio: 1.25
+  min_iv_hv_ratio: 1.25      # F3; 0 = off
   min_ivp: 70
   ivp_history_days: 252
   ivp_min_history: 120
@@ -28,6 +28,8 @@ iv:
   spike_lookback: 10
   spike_move_atr: 1.5    # + F5: price move that explains the IV spike, in ATR(14)
   atm_min_dte: 10        # + ATM IV uses the nearest monthly expiry with at least this many days left
+  timing: cause_passed   # + F5: cause_passed (spec) | shock_passed (no big move for calm_days, realised vol < IV) | off
+  calm_days: 5           # + used by shock_passed
 levels:
   fractal_n: 5
   lookback: 250
@@ -36,10 +38,16 @@ levels:
   recency_halflife: 60       # + bars; a touch this old counts half in the score
   weekly_weight: 2.0         # + weekly swings count double
   manual_score: 10.0         # + score given to levels from levels_manual.csv
-direction: {max_dist_atr: 1.5}                        # + price within this many ATR of a scored level
+direction:
+  method: levels             # + levels (spec: near a scored support/resistance) | trend (vs trend_days average)
+  max_dist_atr: 1.5          # + levels: price within this many ATR of a scored level
+  trend_days: 50             # + trend: bull put above this average, bear call below
 strikes: {delta_min: 0.20, delta_max: 0.30, min_dist_atr: 1.0}
 spread:
+  wing: steps                # + long leg: steps (widths_steps strikes away) | pct (wing_pct x spot away)
   widths_steps: [1, 2, 3, 4]
+  wing_pct: [0.05]           # + used by wing: pct
+  wing_tolerance: 0.35       # + nearest listed strike may miss the target distance by this share of it
   f8_mode: friction          # owner fix: friction | width (spec: credit >= 25% of width)
   min_credit_friction: 3.0   # + net credit >= 3x the cost of crossing both legs' bid-ask to close
   min_credit_ticks: 5        # + and at least 5 ticks
@@ -70,7 +78,7 @@ monitor: {replay_missed: true}                        # + replay missed 5-min ma
 reporting: {weekly_day: fri, weekly_time: "16:00", out_dir: reports}   # +
 exit:
   stop_mult: 2.0
-  tp_frac: 0.50
+  tp_frac: 0.50              # close when the cost to close falls to this share of the credit (0.50 = keep 50%)
   days_before_expiry: 5
   thesis_stop: true
   on_new_event: true
@@ -143,3 +151,14 @@ paths:                                                # + relative to this file'
   fixtures: fixtures
   imports: imports          # + drop NSE event CSV exports into imports/events/
   market_store: data/market_nse.db   # + recorded NSE quotes (real bid/ask) for future backtests
+strategies:                  # + paper sleeves: separate paper books beside the main rules, never traded live
+  - name: v2
+    description: "Draft v2 from research/strategy_review.md: IV percentile without IV/HV, shock passed, trend direction, 3-4% wings, keep 75% of credit"
+    overrides:
+      iv: {min_iv_hv_ratio: 0, timing: shock_passed}
+      direction: {method: trend}
+      strikes: {delta_min: 0.15, delta_max: 0.25}
+      # The US study favoured 5-6% wings, but with ~Rs 6-7 lakh per lot one lot's max loss (~Rs 28-33k) would
+      # exceed the 5% per-trade gap cap on Rs 5 lakh capital; 3-4% wings fit one lot.
+      spread: {wing: pct, wing_pct: [0.03, 0.04]}
+      exit: {tp_frac: 0.25, stop_mult: 2.5, thesis_stop: false}   # take profit once 75% of the credit is kept

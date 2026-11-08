@@ -120,7 +120,7 @@ def test_scan_without_turnover_rejects_everything_at_f1(raw_config, write_config
     res = run_scan(ctx)
     assert res.funnel["F1 universe"] == 8 and not res.ranked
     with ctx.engine.connect() as conn:
-        rows = conn.execute(select(Candidate.reject_reason, Candidate.f1_pass)).all()
+        rows = conn.execute(select(Candidate.reject_reason, Candidate.f1_pass).where(Candidate.strategy == "main")).all()
     assert len(rows) == 8 and all(r.f1_pass is False and "no option turnover" in r.reject_reason for r in rows)
 
 
@@ -165,7 +165,7 @@ def test_relaxed_scan_produces_ranked_spreads(relaxed_cfg, tmp_path):
     assert all(best.flags[f"f{i}"] for i in range(1, 10))
     assert best.side == BULL_PUT and best.long_k < best.short_k or best.side == BEAR_CALL and best.long_k > best.short_k
     with ctx.engine.connect() as conn:
-        acc = conn.execute(select(Candidate).where(Candidate.scan_id == res.scan_id,
+        acc = conn.execute(select(Candidate).where(Candidate.scan_id == res.scan_id, Candidate.strategy == "main",
                                                    Candidate.accepted.is_(True))).mappings().all()
     assert len(acc) == len(res.ranked)
     inputs = json.loads(acc[0]["inputs_json"])

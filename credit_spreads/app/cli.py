@@ -156,7 +156,12 @@ def _cmd_report(args: argparse.Namespace) -> int:
         from .reporting.metrics import equity_series
         eq = equity_series(ctx.engine)
         asof = eq[-1].date if eq else None
-    print(f"report written to {write_report(ctx, asof)}")
+    names = ctx.cfg.strategy_names if args.strategy == "all" else [args.strategy or "main"]
+    for name in names:
+        if name not in ctx.cfg.strategy_names:
+            print(f"no strategy named {name!r} (have: {', '.join(ctx.cfg.strategy_names)})")
+            return 2
+        print(f"report written to {write_report(ctx.for_strategy(name), asof)}")
     return 0
 
 
@@ -202,8 +207,12 @@ def _cmd_resume(args: argparse.Namespace) -> int:
     state.clear(ctx.engine, state.KILLED)
     msg = "Kill switch cleared."
     if args.drawdown:
-        state.clear(ctx.engine, state.DD_PAUSED)
-        msg += " Drawdown pause reset."
+        name = args.strategy or "main"
+        if name not in ctx.cfg.strategy_names:
+            print(f"no strategy named {name!r} (have: {', '.join(ctx.cfg.strategy_names)})")
+            return 2
+        state.clear(ctx.engine, state.dd_key(name))
+        msg += f" Drawdown pause reset{'' if name == 'main' else ' for ' + name}."
     print(msg)
     return 0
 
@@ -405,6 +414,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     sp = sub.add_parser("resume", help="clear the kill switch")
     sp.add_argument("--drawdown", action="store_true", help="also reset the drawdown pause")
+    sp.add_argument("--strategy", help="the book whose drawdown pause to reset (default: main)")
     sp.add_argument("--mock", action="store_true")
     sp.set_defaults(func=_cmd_resume)
 
@@ -423,6 +433,7 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--mock", action="store_true")
     sp.add_argument("--db", help="report on a specific database (e.g. a simulation run)")
     sp.add_argument("--asof", help="YYYY-MM-DD (default: today, or the last equity date with --db)")
+    sp.add_argument("--strategy", help="main (default), a paper sleeve's name, or all")
     sp.set_defaults(func=_cmd_report)
 
     sp = sub.add_parser("backtest", help="replay real end-of-day US option data through the live code path")

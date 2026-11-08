@@ -110,8 +110,10 @@ def test_funnel_counts_stock_scans(ran):
 
 def test_dashboard_loader_reads_db(ran):
     d = dashboard_load(str(ran.engine.url.database))
-    assert set(d) == {"open", "closed", "equity", "candidates", "state"}
-    assert len(d["equity"]) == 5
+    assert set(d) == {"open", "closed", "equity", "candidates", "state", "strategies"}
+    assert len(d["equity"]) == 5                                    # the main book only
+    assert list(d["strategies"].strategy) == ["main", "v2"]           # the shipped paper sleeve
+    assert len(dashboard_load(str(ran.engine.url.database), "v2")["equity"]) == 5
 
 
 def test_dashboard_renders_with_streamlit(ran):

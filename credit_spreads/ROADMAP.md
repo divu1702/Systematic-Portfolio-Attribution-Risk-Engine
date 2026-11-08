@@ -79,8 +79,8 @@ is meant to ensure.
 - **Run the first Indian study on the laptop's first night** (`research/india_stock_study.py`) and
   decide D1-D5, V1 and B1 in `research/research_plan.md` by its rules; then the option hypotheses
   (R1-R6, E1) as expiries complete, and the demand ones (P1-P4) once snapshots accumulate.
-- **Restructure the scanner** into signal, structure and risk layers so several candidate strategies
-  can paper-trade side by side (paper only).
+- **More structures and signals for the sleeves**: momentum direction, IV / forecast richness ranking,
+  iron condors and debit spreads (research plan R2, R6), once the first Indian study settles D1-D2 and V1.
 - **Intraday NSE replay.** Once a few months of 1-minute candles and quote snapshots exist, replay
   the 5-minute monitor on them (stops and targets at the marks they run on live, fills from the
   nearest snapshot's bid/ask) instead of once a day at the close.
@@ -128,3 +128,4 @@ is meant to ensure.
   for the strategy's strikes; the study prices options at their trade nearest 15:00.
 - Research plan with pre-registered hypotheses; first Indian study (stock prices only); snapshots
   record order-book imbalance; NIFTY 50 bars archived for beta.
+- Scanner in layers (signals, entry rules, structures, risk) with paper sleeves side by side; v2 sleeve.

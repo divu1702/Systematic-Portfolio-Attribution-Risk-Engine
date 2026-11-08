@@ -118,6 +118,7 @@ class Candidate(Base):
     reject_reason: Mapped[Optional[str]] = mapped_column(Text)
     inputs_json: Mapped[Optional[str]] = mapped_column(Text)
     config_hash: Mapped[Optional[str]] = mapped_column(String)
+    strategy: Mapped[str] = mapped_column(String, default="main")
 
 
 class Trade(Base):
@@ -162,6 +163,7 @@ class Trade(Base):
     replayed: Mapped[bool] = mapped_column(Boolean, default=False)
     risk: Mapped[Optional[float]] = mapped_column(Float)
     config_hash: Mapped[Optional[str]] = mapped_column(String)
+    strategy: Mapped[str] = mapped_column(String, default="main")
 
 
 class Mark(Base):
@@ -194,6 +196,7 @@ class Order(Base):
 class Equity(Base):
     __tablename__ = "equity"
     date: Mapped[dt.date] = mapped_column(Date, primary_key=True)
+    strategy: Mapped[str] = mapped_column(String, primary_key=True, default="main")
     equity: Mapped[float] = mapped_column(Float)
     realised: Mapped[float] = mapped_column(Float)
     unrealised: Mapped[float] = mapped_column(Float)

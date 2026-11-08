@@ -148,6 +148,8 @@ def run_backtest(ctx: Context, days: Sequence[date], warmup: int,
         ctx.clock.set(datetime.combine(d, time(15, 25)))
         res = scan_job(ctx, enter=i >= warmup)
         for m in res.entry_messages:
+            if m.startswith("["):                 # paper sleeves: summarised per book at the end
+                continue
             (run.entries if m.startswith("ENTRY") else run.rejections).append(f"{d} {m}")
         ctx.clock.set(datetime.combine(d, time(15, 35)))
         eod_job(ctx)

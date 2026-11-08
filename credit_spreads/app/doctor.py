@@ -54,11 +54,18 @@ def _config_section(r: Report, cfg: Config, env: Mapping[str, str]) -> None:
     r.row("F1 universe", (f"top {u.top_n} by {u.turnover_window}-day option turnover" if u.top_n else
                           "all F&O stocks") + (f", turnover >= {inr(u.min_avg_turnover)}/day" if u.min_avg_turnover else ""))
     r.row("F2 event buffer", f"expiry + {cfg.events.buffer_days}d, stale after {cfg.events.max_staleness_days}d")
-    r.row("F3 IV / HV20", f">= {cfg.iv.min_iv_hv_ratio}")
+    r.row("F3 IV / HV20", f">= {cfg.iv.min_iv_hv_ratio}" if cfg.iv.min_iv_hv_ratio else "off")
     r.row("F4 IV percentile", f">= {cfg.iv.min_ivp:g} over {cfg.iv.ivp_history_days}d "
           f"(proxy until {cfg.iv.ivp_min_history}d: IV > HV p{cfg.iv.proxy_hv_pctile:g})")
-    r.row("F5 spike lookback", f"{cfg.iv.spike_lookback}d, move >= {cfg.iv.spike_move_atr} x ATR")
-    r.row("F6 level buffer", f">= {cfg.levels.min_buffer_atr} x ATR")
+    r.row("F5 timing", {"cause_passed": f"cause passed: IV spike after a move >= {cfg.iv.spike_move_atr} x ATR or an "
+                                        f"event within {cfg.iv.spike_lookback}d",
+                        "shock_passed": f"shock passed: no move >= {cfg.iv.spike_move_atr} x ATR in {cfg.iv.calm_days} "
+                                        f"sessions, their realised vol below IV",
+                        "off": "off"}[cfg.iv.timing])
+    r.row("direction", f"support/resistance within {cfg.direction.max_dist_atr} x ATR" if cfg.direction.method == "levels"
+          else f"trend: bull put above the {cfg.direction.trend_days}-day average, bear call below")
+    r.row("F6 level buffer", f">= {cfg.levels.min_buffer_atr} x ATR" if cfg.direction.method == "levels"
+          else "not used (trend direction)")
     r.row("F7 short strike", f"delta {cfg.strikes.delta_min:.2f}-{cfg.strikes.delta_max:.2f}, "
           f">= {cfg.strikes.min_dist_atr} x ATR from spot")
     sc = cfg.spread
@@ -73,8 +80,9 @@ def _config_section(r: Report, cfg: Config, env: Mapping[str, str]) -> None:
     r.row("EV", f"hv_weight {cfg.ev.hv_weight}, EV/max loss >= {pct(cfg.ev.min_ev_ratio)}")
 
     r.heading("Exits and risk")
-    r.row("exits", f"stop {cfg.exit.stop_mult}x credit ({cfg.exit.stop_price} prices), target "
-          f"{pct(cfg.exit.tp_frac, 0)}, time stop T-{cfg.exit.days_before_expiry} trading days")
+    r.row("exits", f"stop {cfg.exit.stop_mult}x credit ({cfg.exit.stop_price} prices), take profit with "
+          f"{pct(1 - cfg.exit.tp_frac, 0)} of the credit kept, time stop T-{cfg.exit.days_before_expiry} trading days"
+          + ("" if cfg.exit.thesis_stop else ", no thesis stop"))
     rk = cfg.risk
     basis = (f"loss at stop ({cfg.exit.stop_mult - 1:g}x credit x {rk.stop_overshoot:g})" if rk.sizing_basis == "stop"
              else "max loss")
@@ -86,6 +94,20 @@ def _config_section(r: Report, cfg: Config, env: Mapping[str, str]) -> None:
           f"{cfg.risk.max_open} / {cfg.risk.max_same_direction} / {cfg.risk.max_per_sector}")
     r.row("daily stop / drawdown pause", f"{pct(cfg.risk.daily_stop)} / {pct(cfg.risk.dd_pause)}")
     r.row("live order rate cap", f"{cfg.live.max_ops} orders/sec")
+
+    if cfg.strategies:
+        r.heading("Paper sleeves (separate books, never live)")
+        for st in cfg.strategies:
+            changes = []
+
+            def walk(prefix, d):
+                for k, v in d.items():
+                    if isinstance(v, dict):
+                        walk(f"{prefix}{k}.", v)
+                    else:
+                        changes.append(f"{prefix}{k}={v}")
+            walk("", st.overrides)
+            r.row(st.name, (st.description + ": " if st.description else "") + (", ".join(changes) or "no changes"))
 
     r.heading("Costs")
     c = cfg.costs

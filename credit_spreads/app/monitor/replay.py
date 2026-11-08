@@ -62,17 +62,21 @@ def catch_up(ctx, executor) -> List[str]:
         if not times:
             continue
         log.info("replaying %d missed marks for %s", len(times), t.trade_id)
+        from .exits import trade_context
+
+        tctx, ex = trade_context(ctx, executor, t)
         for ts in times:
             sp = short_c[ts] * (1 + h)
             lp = long_c.get(ts, 0.0) * (1 - h)
-            m = mark_trade(ctx, t, {}, ts=ts, source="replay", prices=(sp, lp, short_c[ts], long_c.get(ts, 0.0)),
+            m = mark_trade(tctx, t, {}, ts=ts, source="replay", prices=(sp, lp, short_c[ts], long_c.get(ts, 0.0)),
                            spot=spot_c.get(ts))
             phase = THESIS if ts.time() == thesis_t else REGULAR
-            decision = decide_exit(ctx, t, m, phase, cal, check_events=False)
+            decision = decide_exit(tctx, t, m, phase, cal, check_events=False)
             if decision:
                 reason, gap = decision
-                res = executor.close_spread(t, {}, reason, ts=ts, gap=gap, replayed=True, prices=(sp, lp))
-                msg = (f"EXIT (replayed) {t.symbol} {t.short_k:g}/{t.long_k:g}: {reason} at {ts:%Y-%m-%d %H:%M}, "
+                res = ex.close_spread(t, {}, reason, ts=ts, gap=gap, replayed=True, prices=(sp, lp))
+                tag = "" if t.strategy == "main" else f"[{t.strategy}] "
+                msg = (f"{tag}EXIT (replayed) {t.symbol} {t.short_k:g}/{t.long_k:g}: {reason} at {ts:%Y-%m-%d %H:%M}, "
                        f"net P&L {inr(res.pnl_net)}")
                 msgs.append(msg)
                 ctx.notifier.send(msg, "exit")

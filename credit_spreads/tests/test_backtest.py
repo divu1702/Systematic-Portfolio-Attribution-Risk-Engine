@@ -169,7 +169,7 @@ def test_backtest_end_to_end_smoke(store, tmp_path):
     ctx = runner.make_context(cfg, p, tmp_path / "bt.db", td[0], {"AAA": "Tech", "BBB": "Energy"})
     run = runner.run_backtest(ctx, td, warmup=10)
     with ctx.engine.connect() as conn:
-        n_eq = conn.execute(select(func.count()).select_from(Equity)).scalar()
+        n_eq = conn.execute(select(func.count()).select_from(Equity).where(Equity.strategy == "main")).scalar()
         n_snap = conn.execute(select(func.count()).select_from(IVSnapshot)).scalar()
     assert n_eq == len(td)
     assert n_snap == 2 * len(td)

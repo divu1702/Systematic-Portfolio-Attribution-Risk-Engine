@@ -132,7 +132,8 @@ class PaperExecutor:
         max_loss = (cand.width - credit) * qty
         risk = risk_per_lot(cfg, credit, cand.width, cand.lot_size) * lots
         margin, fallback = self._margin(cand, qty, short_fill, long_fill, max_loss)
-        trade_id = f"T{ts:%Y%m%d%H%M}-{cand.symbol}-{uuid.uuid4().hex[:6]}"
+        tag = "" if ctx.strategy == "main" else f"{ctx.strategy}-"
+        trade_id = f"T{ts:%Y%m%d%H%M}-{tag}{cand.symbol}-{uuid.uuid4().hex[:6]}"
         legs = [
             {"leg": "short", "tradingsymbol": cand.short_sym, "strike": cand.short_k, "cp": meta["cp"],
              "qty": qty, "fill": short_fill.price, "natural": short_fill.natural},
@@ -148,7 +149,7 @@ class PaperExecutor:
             hv20=i.get("hv20"), ivp=i.get("ivp"), ivp_method=i.get("ivp_method"), level_ref=i.get("level"),
             p_market=cand.p_market, p_model=cand.p_model, breakeven_wr=i.get("breakeven_win_rate"),
             iv_hv=i.get("iv_hv"), short_k=cand.short_k, long_k=cand.long_k, mae=0.0, mfe=0.0,
-            config_hash=_config_hash(ctx),
+            config_hash=_config_hash(ctx), strategy=ctx.strategy,
         )
         with ctx.engine.begin() as conn:
             conn.execute(insert(Trade).values(**row))

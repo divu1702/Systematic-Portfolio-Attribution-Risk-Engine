@@ -10,9 +10,10 @@ from ..data.models import Equity
 
 
 def current_equity(ctx) -> float:
-    """Latest end-of-day equity, or starting capital before the first EOD."""
+    """Latest end-of-day equity of this context's book, or its starting capital before the first EOD."""
     with ctx.engine.connect() as conn:
-        eq = conn.execute(select(Equity.equity).order_by(Equity.date.desc()).limit(1)).scalar()
+        eq = conn.execute(select(Equity.equity).where(Equity.strategy == ctx.strategy)
+                          .order_by(Equity.date.desc()).limit(1)).scalar()
     return float(eq) if eq is not None else float(ctx.cfg.capital)
 
 

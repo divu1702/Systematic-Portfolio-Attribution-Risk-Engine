@@ -128,7 +128,7 @@ def traded(relaxed_cfg, tmp_path):
 
 def test_entries_record_trade_orders_and_alerts(traded):
     ctx, res, msgs = traded
-    trades = open_trades(ctx.engine)
+    trades = open_trades(ctx.engine, "main")                       # each book has its own limits
     assert trades, msgs
     assert any(m.startswith("ENTRY") for m in msgs)
     t = trades[0]
@@ -145,7 +145,10 @@ def test_entries_record_trade_orders_and_alerts(traded):
     assert {(o.leg, o.side) for o in orders} == {("long", "BUY"), ("short", "SELL")}
     for o in orders:                                    # paper fills are worse than natural
         assert (o.fill_px > o.limit_px) if o.side == "BUY" else (o.fill_px < o.limit_px)
-    assert [k for k, _ in ctx.notifier.sent].count("entry") == len(trades)
+    assert [k for k, _ in ctx.notifier.sent].count("entry") == len(open_trades(ctx.engine))   # every book alerts
+    for name in ctx.cfg.strategy_names[1:]:                         # paper sleeves keep their own limits
+        book = open_trades(ctx.engine, name)
+        assert len({x.sector for x in book}) == len(book) and len(book) <= ctx.cfg.for_strategy(name).risk.max_open
 
 
 def test_margin_fallback_is_flagged(relaxed_cfg, tmp_path):
@@ -304,7 +307,7 @@ def test_sim_trading_days_end_to_end(relaxed_cfg, tmp_path):
     results = run_trading(ctx, days, outage_prob=0.5, seed=3)
     with ctx.engine.connect() as conn:
         n_marks = conn.execute(select(func.count()).select_from(Mark)).scalar()
-        n_eq = conn.execute(select(func.count()).select_from(Equity)).scalar()
+        n_eq = conn.execute(select(func.count()).select_from(Equity).where(Equity.strategy == "main")).scalar()
         n_trades = conn.execute(select(func.count()).select_from(Trade)).scalar()
     assert n_eq == 6 and n_trades > 0 and n_marks > 0
     assert any(r["outage"] for r in results)

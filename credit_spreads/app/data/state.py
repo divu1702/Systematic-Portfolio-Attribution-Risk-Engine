@@ -11,9 +11,14 @@ from sqlalchemy.dialects.sqlite import insert
 from ..clock import now_ist
 from .models import SystemState
 
-KILLED = "killed"                 # value: reason
-DD_PAUSED = "dd_paused"           # value: reason
+KILLED = "killed"                 # value: reason (all strategies)
+DD_PAUSED = "dd_paused"           # value: reason (main book; see dd_key)
 EQUITY_PEAK = "equity_peak"
+
+
+def dd_key(strategy: str = "main") -> str:
+    """Each book has its own drawdown pause; the main book keeps the original key."""
+    return DD_PAUSED if strategy == "main" else f"{DD_PAUSED}:{strategy}"
 
 
 def get(engine: Engine, key: str, default: Any = None) -> Any:

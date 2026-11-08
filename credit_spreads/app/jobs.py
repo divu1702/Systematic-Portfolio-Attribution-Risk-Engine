@@ -70,7 +70,10 @@ def eod_job(ctx):
 
     catch_up_daily(ctx, ctx.clock.today())
     events.fetch_events(ctx)
-    point = eod_equity(ctx)
+    point = None
+    for book in ctx.books():                  # the main book first, then each paper sleeve
+        p = eod_equity(book)
+        point = point or p
     try:
         backup_database(ctx)
     except Exception as exc:          # a failed backup must not stop the end-of-day job

@@ -6,15 +6,16 @@ never mix with real paper-trading records.
 
 from __future__ import annotations
 
+import dataclasses
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, Mapping, Optional
+from typing import Any, Dict, List, Mapping, Optional
 
 from sqlalchemy import Engine
 
 from .broker.base import Broker
 from .clock import Clock, SystemClock
-from .config import Config
+from .config import MAIN, Config
 from .data.db import init_db
 from .env import load_env
 from .reporting.notifier import LogNotifier, Notifier
@@ -32,6 +33,29 @@ class Context:
     is_mock: bool = False
     banner: str = ""                  # shown on reports, e.g. "Backtest on real US data"
     cache: Dict[str, Any] = field(default_factory=dict)
+    strategy: str = MAIN              # the book this context acts for (config: strategies)
+    parent: Optional["Context"] = None    # the main context, for a strategy's context
+
+    def for_strategy(self, name: str, missing_ok: bool = False) -> "Context":
+        """The same context acting for one strategy's book: that strategy's rules in `cfg`, and
+        the same clock, database, broker, alerts and cache. With missing_ok, a strategy no longer in
+        the config (open trades of a removed sleeve) gets the main rules under its own name."""
+        main = self.parent or self
+        if name == MAIN:
+            return main
+        if missing_ok and name not in main.cfg.strategy_names:
+            return dataclasses.replace(main, strategy=name, parent=main)
+        key = ("_strategy_cfg", name)
+        hit = main.cache.get(key)
+        if hit is None or hit[0] is not main.cfg:          # rebuilt if the main config was replaced
+            hit = (main.cfg, main.cfg.for_strategy(name))
+            main.cache[key] = hit
+        return dataclasses.replace(main, cfg=hit[1], strategy=name, parent=main)
+
+    def books(self) -> List["Context"]:
+        """The main book first, then each paper sleeve."""
+        main = self.parent or self
+        return [main.for_strategy(n) for n in main.cfg.strategy_names]
 
 
 def mock_db_path(cfg: Config) -> Path:

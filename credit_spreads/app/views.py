@@ -102,30 +102,55 @@ def scan_report(ctx, result, show_rejections: int = 0) -> str:
         for o in result.outcomes:
             if o.stage != "accepted" and o.stage != "F1 universe":
                 lines.append(f"  {o.symbol:<12} {o.stage:<18} {o.reason}")
+    for name, book in (getattr(result, "books", None) or {}).items():
+        if name == "main":
+            continue
+        f = book.funnel
+        top = ", ".join(f"{c.symbol} {c.side.replace('_', ' ')} {c.short_k:g}/{c.long_k:g} EV/ML {c.ev_ratio:.1%}"
+                        for c in book.ranked[:5]) or "none"
+        stages = ", ".join(f"{s} {n}" for s, n in f.items() if n and s not in ("accepted", "F1 universe"))
+        lines += ["", f"Paper sleeve [{name}]: {f['accepted']} accepted ({top}). Removed: {stages or '-'}"]
     return "\n".join(lines)
 
 
 def status_report(ctx) -> str:
-    from .data import state
     from .fmt import inr
     from .risk.limits import kill_switches, open_trades
     from .risk.sizing import current_equity
 
-    eq = current_equity(ctx)
-    lines = [f"Mode {ctx.cfg.mode.upper()}{'  [SYNTHETIC MARKET]' if ctx.is_mock else ''}   "
-             f"equity {inr(eq)}   per-trade budget {inr(ctx.cfg.risk.per_trade * eq)}"]
-    blocks = kill_switches(ctx, eq)
-    lines.append("Entries: " + ("ALLOWED" if not blocks else "BLOCKED - " + "; ".join(blocks)))
-    trades = open_trades(ctx.engine)
-    if trades:
-        rows = [[t.symbol, t.side.replace("_", " "), f"{t.short_k:g}/{t.long_k:g}", str(t.expiry), t.lots,
-                 f"{t.entry_credit:.2f}", inr(t.risk or t.max_loss), inr(t.max_loss), inr(t.mfe or 0),
-                 inr(t.mae or 0)] for t in trades]
-        lines += ["", table(["symbol", "side", "strikes", "expiry", "lots", "credit", "risk at stop", "max loss",
-                             "MFE", "MAE"], rows, align="lllllrrrrr")]
-    else:
-        lines.append("No open spreads.")
+    lines = []
+    for book in (ctx.parent or ctx).books():
+        eq = current_equity(book)
+        head = (f"Mode {book.cfg.mode.upper()}{'  [SYNTHETIC MARKET]' if ctx.is_mock else ''}   " if book.strategy == "main"
+                else f"\nPaper sleeve [{book.strategy}]   ")
+        lines.append(f"{head}equity {inr(eq)}   per-trade budget {inr(book.cfg.risk.per_trade * eq)}")
+        blocks = kill_switches(book, eq)
+        lines.append("Entries: " + ("ALLOWED" if not blocks else "BLOCKED - " + "; ".join(blocks)))
+        trades = open_trades(ctx.engine, book.strategy)
+        if trades:
+            rows = [[t.symbol, t.side.replace("_", " "), f"{t.short_k:g}/{t.long_k:g}", str(t.expiry), t.lots,
+                     f"{t.entry_credit:.2f}", inr(t.risk or t.max_loss), inr(t.max_loss), inr(t.mfe or 0),
+                     inr(t.mae or 0)] for t in trades]
+            lines += ["", table(["symbol", "side", "strikes", "expiry", "lots", "credit", "risk at stop", "max loss",
+                                 "MFE", "MAE"], rows, align="lllllrrrrr")]
+        else:
+            lines.append("No open spreads.")
     return "\n".join(lines)
+
+
+def books_table(ctx) -> str:
+    """The main book and every paper sleeve side by side ('' when there are no sleeves)."""
+    from .fmt import inr
+    from .reporting.metrics import compare_books
+
+    if len((ctx.parent or ctx).cfg.strategy_names) < 2:
+        return ""
+    rows = [[r["strategy"], r["closed"], r["open"], f"{r['win_rate']:.0%}" if r["win_rate"] is not None else "-",
+             f"{r['breakeven_win_rate']:.0%}" if r["breakeven_win_rate"] is not None else "-", inr(r["net"]),
+             f"{r['profit_factor']:.2f}" if r["profit_factor"] is not None else "-", inr(r["equity"]),
+             f"{r['max_drawdown']:.1%}"] for r in compare_books(ctx)]
+    return table(["strategy", "closed", "open", "win rate", "breakeven", "net P&L", "profit factor", "equity",
+                  "max DD"], rows, align="lrrrrrrrr")
 
 
 def sim_summary(ctx, results) -> str:
@@ -136,12 +161,12 @@ def sim_summary(ctx, results) -> str:
     from .fmt import inr
 
     with Session(ctx.engine) as s:
-        trades = list(s.scalars(select(Trade).order_by(Trade.entry_ts)))
-        eq = list(s.scalars(select(Equity).order_by(Equity.date)))
+        trades = list(s.scalars(select(Trade).where(Trade.strategy == "main").order_by(Trade.entry_ts)))
+        eq = list(s.scalars(select(Equity).where(Equity.strategy == "main").order_by(Equity.date)))
     closed = [t for t in trades if t.status == "closed"]
     lines = ["", "SIMULATION (synthetic market: tests the machinery, says nothing about real edge)", ""]
     n_entries = sum(1 for r in results for m in r["entries"] if m.startswith("ENTRY"))
-    n_rej = sum(1 for r in results for m in r["entries"] if not m.startswith("ENTRY"))
+    n_rej = sum(1 for r in results for m in r["entries"] if not m.startswith(("ENTRY", "[")))
     lines.append(f"Entries {n_entries}, entry rejections {n_rej}, closed {len(closed)}, "
                  f"open {len(trades) - len(closed)}, outage days {sum(1 for r in results if r.get('outage'))}")
     if closed:
@@ -161,6 +186,8 @@ def sim_summary(ctx, results) -> str:
     if eq:
         lines.append(f"\nEquity {inr(eq[0].equity)} -> {inr(eq[-1].equity)}, max drawdown "
                      f"{max(e.drawdown for e in eq):.1%}")
+    if (cmp := books_table(ctx)):
+        lines += ["", "Strategies side by side (each a separate paper book):", cmp]
     return "\n".join(lines)
 
 
@@ -221,4 +248,6 @@ def backtest_summary(run) -> str:
         if n:
             lines.append(f"  {stage:<20} -{n:>6,}   {remaining:>6,} left")
     lines.append(f"  {'accepted':<20}  {f['accepted']:>6,}")
+    if (cmp := books_table(ctx)):
+        lines += ["", "Strategies side by side (each a separate paper book):", cmp]
     return "\n".join(lines)

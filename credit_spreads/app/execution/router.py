@@ -8,7 +8,8 @@ from .paper import PaperExecutor
 
 
 def get_executor(ctx):
-    if ctx.cfg.mode == "paper":
+    """The order adapter for this context's book. Paper sleeves (config: strategies) are always paper."""
+    if ctx.cfg.mode == "paper" or ctx.strategy != "main":
         return PaperExecutor(ctx)
     # Live: both the config and the manual confirmation flag must allow it.
     require_live(ctx.cfg, ctx.env)
