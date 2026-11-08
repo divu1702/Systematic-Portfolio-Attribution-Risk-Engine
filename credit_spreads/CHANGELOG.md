@@ -5,6 +5,17 @@ Each entry names the keys changed, old and new values, and the evidence.
 
 ## Unreleased
 
+### Market-independent fixes from the research review (owner-approved, 8 Nov 2026)
+These follow from option maths and trading costs, not from fitting US data; the spec's behaviour is one
+setting away.
+- F8 is now a friction test (`spread.f8_mode: friction`): net credit after all charges must be at least
+  3x the cost of crossing both legs' bid-ask to close (`min_credit_friction`) and at least 5 ticks
+  (`min_credit_ticks`). The spec's 25%-of-width rule (`f8_mode: width`) almost never passes together with
+  F7's 0.20-0.30 delta band. Funnel stage renamed "F8 credit quality".
+- Hard stop judged on the mid-price cost to close (`exit.stop_price: mid`); fills stay at natural prices.
+  Prevents wide quotes alone from stopping trades out. The path-simulated EV uses the same rule.
+- Optional cap on contracts per spread (`risk.max_lots_per_trade`, off by default).
+
 ### Real-data backtest and architecture (8 Nov 2026)
 - `python -m app backtest load|run`: DoltHub US end-of-day option quotes, earnings and splits replayed
   through the live code path (HistoricalBroker, HistoricalExchange, runner); `--set` overrides for

@@ -99,6 +99,13 @@ class StrikesCfg(_Section):
 
 class SpreadCfg(_Section):
     widths_steps: List[PosInt] = Field(default_factory=lambda: [1, 2, 3, 4], min_length=1)
+    # F8. "friction" (owner-approved fix, Nov 2026): the net credit after all charges must be at least
+    # `min_credit_friction` x the cost of crossing both legs' bid-ask to close, and at least
+    # `min_credit_ticks` ticks. "width" is the spec's rule: credit >= min_credit_width x width, which
+    # almost never passes together with F7's 0.20-0.30 delta band.
+    f8_mode: Literal["friction", "width"] = "friction"
+    min_credit_friction: Annotated[float, Field(gt=0)] = 3.0
+    min_credit_ticks: NonNegInt = 5
     min_credit_width: Fraction = 0.25
 
     @field_validator("widths_steps")
@@ -173,6 +180,9 @@ class ExitCfg(_Section):
     days_before_expiry: NonNegInt = 5
     thesis_stop: bool = True
     on_new_event: bool = True
+    # Hard-stop trigger price. "mid" (owner-approved fix, Nov 2026): the mid-price cost to close, so a
+    # wide quote alone cannot stop a trade out; fills are still at natural prices. "natural": the spec.
+    stop_price: Literal["mid", "natural"] = "mid"
 
 
 class RiskCfg(_Section):
@@ -189,6 +199,7 @@ class RiskCfg(_Section):
     gap_cap_per_trade: Optional[Fraction] = 0.05
     gap_cap_total: Optional[Fraction] = 0.20
     max_per_sector: PosInt = 1
+    max_lots_per_trade: Optional[PosInt] = None      # optional hard cap on contracts per spread
     max_margin_util: Annotated[float, Field(gt=0, le=1)] = 0.50
     daily_stop: Fraction = 0.03
     dd_pause: Fraction = 0.10

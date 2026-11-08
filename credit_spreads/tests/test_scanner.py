@@ -256,3 +256,38 @@ def test_scan_quotes_are_batched(cfg, tmp_path):
     run_scan(ctx)
     assert ctx.broker.quote_calls <= 4               # stocks+futures, then all legs (+ rare fallbacks)
     assert "scan_quotes" not in ctx.cache
+
+
+# ----------------------------------------------------------------------------- F8 friction test
+
+def test_f8_friction_mode_rejects_credit_that_the_bid_ask_would_eat(cfg):
+    from app.strategy.scanner import credit_quality
+
+    tight_s = Quote("NFO:S", None, 0, (Level(4.00, 100),), (Level(4.10, 100),), 0, 0)
+    tight_l = Quote("NFO:L", None, 0, (Level(1.95, 100),), (Level(2.05, 100),), 0, 0)
+    ok, _ = credit_quality(cfg, 1.85, 10, tight_s, tight_l, 0.05)
+    assert ok                                       # friction 0.10: needs >= 0.30, credit 1.85
+    wide_s = Quote("NFO:S", None, 0, (Level(0.20, 100),), (Level(0.40, 100),), 0, 0)
+    wide_l = Quote("NFO:L", None, 0, (Level(0.05, 100),), (Level(0.15, 100),), 0, 0)
+    ok, why = credit_quality(cfg, 0.17, 1, wide_s, wide_l, 0.05)
+    assert not ok and "bid-ask" in why               # friction 0.15: needs 0.45
+    ok, why = credit_quality(cfg, 0.20, 1, tight_s, tight_l, 0.05)
+    assert not ok                                    # below 5 ticks of 0.05 = 0.25 (friction needs 0.30)
+    spec = cfg.model_copy(update={"spread": cfg.spread.model_copy(update={"f8_mode": "width"})})
+    assert credit_quality(spec, 2.4, 10, tight_s, tight_l, 0.05)[0] is False      # 24% < 25%
+    assert credit_quality(spec, 2.5, 10, tight_s, tight_l, 0.05)[0] is True
+
+
+def test_mid_price_stop_does_not_fire_on_quote_noise():
+    """Same spread, wide end-of-day quotes: the natural-price stop fires far more often than the
+    mid-price stop, and fills stay at natural prices either way."""
+    import numpy as np
+    from app.strategy.ev import simulate_exits
+
+    F, T, credit = _put_spread()
+    z = np.random.default_rng(5).standard_normal((20_000, 13 * 6))
+    common = (BULL_PUT, F, 470, 460, 0.40, 0.40, 0.30, T, 7 / 365, 13, credit, credit, 0.4, 0.4, None, 2.0, -1.0,
+              False, 0.045, z, 6)
+    _, why_nat = simulate_exits(*common, stop_on_mid=False)
+    _, why_mid = simulate_exits(*common, stop_on_mid=True)
+    assert (why_mid == 0).mean() < (why_nat == 0).mean() * 0.8

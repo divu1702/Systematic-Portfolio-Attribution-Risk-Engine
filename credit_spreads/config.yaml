@@ -38,7 +38,12 @@ levels:
   manual_score: 10.0         # + score given to levels from levels_manual.csv
 direction: {max_dist_atr: 1.5}                        # + price within this many ATR of a scored level
 strikes: {delta_min: 0.20, delta_max: 0.30, min_dist_atr: 1.0}
-spread: {widths_steps: [1, 2, 3, 4], min_credit_width: 0.25}
+spread:
+  widths_steps: [1, 2, 3, 4]
+  f8_mode: friction          # owner fix: friction | width (spec: credit >= 25% of width)
+  min_credit_friction: 3.0   # + net credit >= 3x the cost of crossing both legs' bid-ask to close
+  min_credit_ticks: 5        # + and at least 5 ticks
+  min_credit_width: 0.25     # used only when f8_mode is width
 ev:
   hv_weight: 0.5
   min_ev_ratio: 0.03
@@ -69,6 +74,7 @@ exit:
   days_before_expiry: 5
   thesis_stop: true
   on_new_event: true
+  stop_price: mid            # owner fix: hard stop judged on mid prices (fills at bid/ask); spec: natural
 risk:
   sizing_basis: stop        # owner: risk = loss at the hard stop (spec: max loss)
   stop_overshoot: 1.25      # + allowance for a stop filling past its trigger
@@ -79,6 +85,7 @@ risk:
   gap_cap_per_trade: 0.05   # + full max loss per trade (a gap through the stop) <= 5% of equity
   gap_cap_total: 0.20       # + combined full max loss of open spreads <= 20% of equity
   max_per_sector: 1
+  max_lots_per_trade: null   # + optional cap on contracts per spread
   max_margin_util: 0.50
   daily_stop: 0.03
   dd_pause: 0.10

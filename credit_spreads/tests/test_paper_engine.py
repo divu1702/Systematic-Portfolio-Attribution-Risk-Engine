@@ -306,3 +306,25 @@ def test_sim_trading_days_end_to_end(relaxed_cfg, tmp_path):
         n_trades = conn.execute(select(func.count()).select_from(Trade)).scalar()
     assert n_eq == 6 and n_trades > 0 and n_marks > 0
     assert any(r["outage"] for r in results)
+
+
+def test_hard_stop_uses_mid_prices_by_default(traded):
+    ctx, _, _ = traded
+    t = open_trades(ctx.engine)[0]
+    cal = TradingCalendar.load(ctx.engine)
+    c = t.entry_credit
+    safe_spot = (t.short_k * 1.5) if t.side == BULL_PUT else (t.short_k * 0.6)
+    noisy = MarkResult(t, SIM_NOW, safe_spot, 2.2 * c, None, True, cost_to_close_mid=1.4 * c)
+    assert ctx.cfg.exit.stop_price == "mid"
+    assert decide_exit(ctx, t, noisy, REGULAR, cal) is None            # wide quote, mid fine: no stop
+    real = MarkResult(t, SIM_NOW, safe_spot, 2.4 * c, None, True, cost_to_close_mid=2.05 * c)
+    assert decide_exit(ctx, t, real, REGULAR, cal) == ("hard_stop", False)
+    ctx.cfg = ctx.cfg.model_copy(update={"exit": ctx.cfg.exit.model_copy(update={"stop_price": "natural"})})
+    assert decide_exit(ctx, t, noisy, REGULAR, cal) == ("hard_stop", False)
+
+
+def test_lot_cap(mock_ctx):
+    from app.risk.sizing import plan_lots
+
+    cfg = mock_ctx.cfg.model_copy(update={"risk": mock_ctx.cfg.risk.model_copy(update={"max_lots_per_trade": 3})})
+    assert plan_lots(cfg, 5_000_000, 1_000, 2_000)[0] == 3

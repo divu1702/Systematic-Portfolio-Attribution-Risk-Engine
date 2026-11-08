@@ -45,6 +45,8 @@ def plan_lots(cfg, equity: float, risk_lot: float, max_loss_lot: float):
             return 0, (f"max loss per lot {max_loss_lot:,.0f} exceeds the gap cap "
                        f"{cfg.risk.gap_cap_per_trade * equity:,.0f}")
         lots = min(lots, cap)
+    if cfg.risk.max_lots_per_trade:
+        lots = min(lots, cfg.risk.max_lots_per_trade)
     return lots, ""
 
 

@@ -19,10 +19,11 @@ class MarkResult:
     trade: Trade
     ts: datetime
     spot: Optional[float]
-    cost_to_close: Optional[float]
+    cost_to_close: Optional[float]           # natural prices: short ask - long bid
     unrealised: Optional[float]
     ok: bool
     reason: str = ""
+    cost_to_close_mid: Optional[float] = None  # mid prices, used by the hard stop when exit.stop_price is mid
 
 
 def quote_keys(trades: List[Trade]) -> List[str]:
@@ -45,12 +46,17 @@ def mark_trade(ctx, t: Trade, quotes: Dict[str, Quote], ts: Optional[datetime] =
         if sq is None or sq.ask <= 0:
             return MarkResult(t, ts, spot, None, None, False, "no ask on the short leg")
         short_ask, long_bid = sq.ask, (lq.bid if lq else 0.0)
+        short_mid = sq.mid or sq.ask
+        long_mid = (lq.mid or lq.bid) if lq else 0.0
         legs = {"short": {"bid": sq.bid, "ask": sq.ask}, "long": {"bid": lq.bid if lq else None,
                                                                      "ask": lq.ask if lq else None}}
     else:
-        short_ask, long_bid = prices
+        short_ask, long_bid = prices[0], prices[1]
+        short_mid, long_mid = (prices[2], prices[3]) if len(prices) >= 4 else (short_ask, long_bid)
         legs = {"short": {"ask_est": short_ask}, "long": {"bid_est": long_bid}}
     ctc = short_ask - long_bid
+    ctc_mid = short_mid - long_mid
+    legs["ctc_mid"] = round(ctc_mid, 4)
     unreal = (t.entry_credit - ctc) * qty
     with ctx.engine.begin() as conn:
         conn.execute(insert(Mark).values(ts=ts, trade_id=t.trade_id, spot=spot, legs_json=json.dumps(legs),
@@ -58,4 +64,4 @@ def mark_trade(ctx, t: Trade, quotes: Dict[str, Quote], ts: Optional[datetime] =
         mae, mfe = min(t.mae or 0.0, unreal), max(t.mfe or 0.0, unreal)
         conn.execute(update(Trade).where(Trade.trade_id == t.trade_id).values(mae=round(mae, 2), mfe=round(mfe, 2)))
     t.mae, t.mfe = mae, mfe
-    return MarkResult(t, ts, spot, ctc, unreal, True)
+    return MarkResult(t, ts, spot, ctc, unreal, True, cost_to_close_mid=ctc_mid)

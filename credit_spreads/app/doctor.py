@@ -61,7 +61,10 @@ def _config_section(r: Report, cfg: Config, env: Mapping[str, str]) -> None:
     r.row("F6 level buffer", f">= {cfg.levels.min_buffer_atr} x ATR")
     r.row("F7 short strike", f"delta {cfg.strikes.delta_min:.2f}-{cfg.strikes.delta_max:.2f}, "
           f">= {cfg.strikes.min_dist_atr} x ATR from spot")
-    r.row("F8 credit / width", f">= {pct(cfg.spread.min_credit_width, 0)}")
+    sc = cfg.spread
+    r.row("F8 credit quality", (f"net credit >= {sc.min_credit_friction:g}x the bid-ask cost to close, "
+                                f"min {sc.min_credit_ticks} ticks") if sc.f8_mode == "friction"
+          else f"credit >= {pct(sc.min_credit_width, 0)} of width (spec)")
     lc = cfg.liquidity
     r.row("F9 liquidity", f"bid-ask <= {pct(lc.max_spread_pct, 0)} of mid, 5-level depth >= {lc.min_depth_cover:g}x order "
           f"on both sides" + (f", OI >= {lc.min_oi_lots} lots" if lc.min_oi_lots else "")
@@ -70,8 +73,8 @@ def _config_section(r: Report, cfg: Config, env: Mapping[str, str]) -> None:
     r.row("EV", f"hv_weight {cfg.ev.hv_weight}, EV/max loss >= {pct(cfg.ev.min_ev_ratio)}")
 
     r.heading("Exits and risk")
-    r.row("exits", f"stop {cfg.exit.stop_mult}x credit, target {pct(cfg.exit.tp_frac, 0)}, "
-          f"time stop T-{cfg.exit.days_before_expiry} trading days")
+    r.row("exits", f"stop {cfg.exit.stop_mult}x credit ({cfg.exit.stop_price} prices), target "
+          f"{pct(cfg.exit.tp_frac, 0)}, time stop T-{cfg.exit.days_before_expiry} trading days")
     rk = cfg.risk
     basis = (f"loss at stop ({cfg.exit.stop_mult - 1:g}x credit x {rk.stop_overshoot:g})" if rk.sizing_basis == "stop"
              else "max loss")

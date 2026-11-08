@@ -43,7 +43,7 @@ log = logging.getLogger(__name__)
 # Funnel stages in evaluation order (stock level). Each stock is counted at its first failure.
 STAGES = ["F1 universe", "DTE window", "data", "F2 events", "F3 IV/HV", "F4 IV percentile",
           "F5 cause passed", "direction", "F6 level buffer", "F7 distance/delta", "F9 liquidity",
-          "F8 credit/width", "risk budget", "EV", "accepted"]
+          "F8 credit quality", "risk budget", "EV", "accepted"]
 SCAN_BAND = 0.30           # quote strikes within 30% of the futures price (performance, not a rule)
 
 
@@ -134,6 +134,22 @@ def liquidity_ok(ctx, qt, lot: int) -> Tuple[bool, str]:
         return False, f"OI {qt.oi // lot} lots"
     if lc.min_vol_lots and qt.volume / lot < lc.min_vol_lots:
         return False, f"volume {qt.volume // lot} lots"
+    return True, ""
+
+
+def credit_quality(cfg, credit: float, width: float, qs, ql, tick: float) -> Tuple[bool, str]:
+    """F8. Friction mode: net credit (after all charges) >= k x the cost of crossing both legs'
+    bid-ask to close, and >= a minimum number of ticks. Width mode: the spec's credit/width floor."""
+    sc = cfg.spread
+    if sc.f8_mode == "width":
+        if credit < sc.min_credit_width * width:
+            return False, f"{credit / width:.0%} of width < {sc.min_credit_width:.0%}"
+        return True, ""
+    friction = ((qs.ask - qs.bid) + (ql.ask - ql.bid)) / 2
+    need = max(sc.min_credit_friction * friction, sc.min_credit_ticks * (tick or 0.05))
+    if credit < need:
+        return False, (f"credit {credit:.2f} < {need:.2f} (x{sc.min_credit_friction:g} the {friction:.2f} it costs to "
+                       f"cross both bid-asks, min {sc.min_credit_ticks} ticks)")
     return True, ""
 
 
@@ -345,15 +361,17 @@ def evaluate_stock(ctx, symbol: str, today: date, cal: TradingCalendar, equity: 
             c.credit_gross = gross
             if gross <= 0:
                 c.flags["f8"] = False
-                c.reject_reason = "F8 credit/width: no credit at natural prices"
+                c.reject_reason = "F8 credit quality: no credit at natural prices"
                 continue
             costs = round_trip_costs(cfg.costs, qs.bid, ql.ask, lot, lot=lot)
             m = spread_metrics(side, k, long_k, qs.bid, ql.ask, lot, costs_per_share=costs / lot)
             c.credit_nat, c.width, c.max_loss, c.breakeven = m.credit, m.width, m.max_loss, m.breakeven
             c.inputs.update(round_trip_costs=costs, breakeven_win_rate=m.breakeven_win_rate)
-            if m.credit < cfg.spread.min_credit_width * m.width:
+            ok8, why8 = credit_quality(cfg, m.credit, m.width, qs, ql, chain.tick_size)
+            c.inputs.update(credit_width=m.credit / m.width, exit_friction=((qs.ask - qs.bid) + (ql.ask - ql.bid)) / 2)
+            if not ok8:
                 c.flags["f8"] = False
-                c.reject_reason = f"F8 credit/width: {m.credit / m.width:.0%} < {cfg.spread.min_credit_width:.0%}"
+                c.reject_reason = f"F8 credit quality: {why8}"
                 continue
             c.flags["f8"] = True
             any_f8 = True
@@ -397,7 +415,7 @@ def evaluate_stock(ctx, symbol: str, today: date, cal: TradingCalendar, equity: 
     elif not any_liq:
         out = StockOutcome(symbol, "F9 liquidity", "no spread with both legs liquid", rows=rows)
     elif not any_f8:
-        out = StockOutcome(symbol, "F8 credit/width", "no spread with enough credit", rows=rows)
+        out = StockOutcome(symbol, "F8 credit quality", "no spread with enough credit", rows=rows)
     elif not any_budget:
         out = StockOutcome(symbol, "risk budget", "no width fits the per-trade risk budget", rows=rows)
     elif not any_depth:

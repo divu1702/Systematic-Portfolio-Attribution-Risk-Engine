@@ -109,7 +109,7 @@ class PathEVResult:
 def simulate_exits(side: str, F0: float, short_k: float, long_k: float, iv_short: float, iv_long: float,
                    sigma: float, T0: float, T_exit: float, n_days: int, credit_gross: float, credit_nat: float,
                    half_short: float, half_long: float, level: float | None, stop_mult: float, tp_frac: float,
-                   thesis_stop: bool, r: float, z: np.ndarray, steps_per_day: int):
+                   thesis_stop: bool, r: float, z: np.ndarray, steps_per_day: int, stop_on_mid: bool = False):
     """Returns (pnl per share array, exit-rule index array). `z` is (n_paths, n_days * steps_per_day)
     standard normals, shared between vols so the comparison uses the same paths."""
     from ..analytics.black76 import price_vec
@@ -135,8 +135,9 @@ def simulate_exits(side: str, F0: float, short_k: float, long_k: float, iv_short
         T = max(T0 - (j + 1) * dT, 0.0)
         vs = price_vec(F, short_k, T, iv_short, r, cp)
         vl = price_vec(F, long_k, T, iv_long, r, cp)
-        ctc = (vs + half_short) - np.maximum(vl - half_long, 0.0)
-        hit_stop = open_ & (ctc >= stop_at)
+        ctc = (vs + half_short) - np.maximum(vl - half_long, 0.0)        # natural: what a close costs
+        trigger = (vs - vl) if stop_on_mid else ctc                     # what the stop rule looks at
+        hit_stop = open_ & (trigger >= stop_at)
         exit_ctc[hit_stop], reason[hit_stop] = ctc[hit_stop], 0
         open_ &= ~hit_stop
         if thesis_stop and level is not None and (j + 1) % steps_per_day == 0:
@@ -165,7 +166,7 @@ def evaluate_paths(side: str, F: float, short_k: float, long_k: float, iv_short:
                   T_exit=T_exit, n_days=n_days, credit_gross=credit_gross, credit_nat=credit_nat,
                   half_short=half_short, half_long=half_long, level=level, stop_mult=x.stop_mult,
                   tp_frac=x.tp_frac, thesis_stop=x.thesis_stop, r=cfg.analytics.risk_free, z=z,
-                  steps_per_day=e.steps_per_day)
+                  steps_per_day=e.steps_per_day, stop_on_mid=x.stop_price == "mid")
     pnl_mkt, _ = simulate_exits(sigma=iv_short, **common)
     pnl, why = simulate_exits(sigma=s_model, **common)
     losses = pnl[pnl < 0]

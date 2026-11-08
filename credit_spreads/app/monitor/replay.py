@@ -65,7 +65,8 @@ def catch_up(ctx, executor) -> List[str]:
         for ts in times:
             sp = short_c[ts] * (1 + h)
             lp = long_c.get(ts, 0.0) * (1 - h)
-            m = mark_trade(ctx, t, {}, ts=ts, source="replay", prices=(sp, lp), spot=spot_c.get(ts))
+            m = mark_trade(ctx, t, {}, ts=ts, source="replay", prices=(sp, lp, short_c[ts], long_c.get(ts, 0.0)),
+                           spot=spot_c.get(ts))
             phase = THESIS if ts.time() == thesis_t else REGULAR
             decision = decide_exit(ctx, t, m, phase, cal, check_events=False)
             if decision:

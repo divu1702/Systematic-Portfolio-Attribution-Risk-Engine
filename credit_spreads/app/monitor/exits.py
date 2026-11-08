@@ -38,7 +38,8 @@ def decide_exit(ctx, t: Trade, m: MarkResult, phase: str, cal: TradingCalendar,
         evs = ev_data.new_events_for_position(ctx, t.symbol, t.expiry)
         if evs:
             return f"event: {evs[0]}", False
-    if m.cost_to_close is not None and m.cost_to_close >= x.stop_mult * t.entry_credit:
+    stop_ctc = m.cost_to_close_mid if (x.stop_price == "mid" and m.cost_to_close_mid is not None) else m.cost_to_close
+    if stop_ctc is not None and stop_ctc >= x.stop_mult * t.entry_credit:
         return "hard_stop", phase == GAP
     if phase == THESIS and x.thesis_stop and m.spot is not None and t.level_ref is not None:
         if (t.side == BULL_PUT and m.spot < t.level_ref) or (t.side != BULL_PUT and m.spot > t.level_ref):
