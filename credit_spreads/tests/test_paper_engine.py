@@ -292,6 +292,8 @@ def test_job_specs_cover_the_spec_schedule(mock_ctx):
     assert names["eod"] == {"hour": 15, "minute": 35}
     assert names["login_reminder"] == {"hour": 9, "minute": 0}
     assert names["monitor"]["minute"] == "*/5"
+    assert names["archive"] == {"hour": 16, "minute": 10}
+    assert names["snapshots"] == {"hour": "9-15", "minute": "2-59/15"}       # clear of the 5-minute monitor
 
 
 def test_sim_trading_days_end_to_end(relaxed_cfg, tmp_path):

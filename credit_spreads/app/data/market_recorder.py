@@ -6,6 +6,10 @@ scan band). Those quotes are saved with their real bid/ask, top-of-book and 5-le
 volume, lot size and tick, plus each day's bars, sectors and the date each corporate event was
 first seen. `python -m app backtest run --market nse` replays the store through the same code.
 
+During the session, `snapshot_quotes` also saves bid/ask through the day (every
+`snapshots.every_min` minutes) for the strikes the strategy trades; the end-of-day step compacts
+those into one compressed blob per contract-day.
+
 Recording never interrupts trading: failures are logged and skipped.
 """
 
@@ -115,3 +119,103 @@ def record_eod(ctx) -> None:
         store.commit()
     finally:
         store.close()
+    compact_snapshots(ctx)
+
+
+# ----------------------------------------------------------------------------- intraday quote snapshots
+
+def snapshot_quotes(ctx) -> int:
+    """Bid/ask, sizes, volume and OI through the day for the strikes the strategy trades: options of
+    each stock's nearest `snapshots.expiries` monthly series within +-`snapshots.band` of the futures
+    price, plus those futures and the stock. Two quote requests for stocks and futures, then about
+    one per 500 options (Kite: one request a second). Rows are staged and compacted after the close
+    (compact_snapshots). Returns the number of quotes saved."""
+    from ..clock import parse_hhmm
+    from .. import market
+
+    sc = ctx.cfg.snapshots
+    if not sc.every_min or not _enabled(ctx):
+        return 0
+    now = ctx.clock.now().replace(second=0, microsecond=0)
+    if not parse_hhmm(sc.start) <= now.time() <= parse_hhmm(sc.end):
+        return 0
+    d = market.ensure_instruments(ctx)
+    with ctx.engine.connect() as conn:
+        rows = conn.execute(select(Instrument.exchange, Instrument.tradingsymbol, Instrument.underlying,
+                                   Instrument.expiry, Instrument.strike, Instrument.instrument_type)
+                            .where(Instrument.date == d)).all()
+    fut_exp: Dict[str, list] = {}
+    for ex, ts, und, exp, k, typ in rows:
+        if typ == "FUT":
+            fut_exp.setdefault(und, []).append(exp)
+    keep = {und: set(sorted(es)[: sc.expiries]) for und, es in fut_exp.items()}
+    meta = {f"{ex}:{ts}": (und, exp, k, typ) for ex, ts, und, exp, k, typ in rows
+            if (typ == "EQ" and und in keep) or (typ != "EQ" and exp in keep.get(und, ()))}
+    head = [key for key, m in meta.items() if m[3] in ("EQ", "FUT")]
+    quotes = ctx.broker.quotes(head)
+    ref: Dict[Tuple[str, date], float] = {}
+    for key in head:
+        q, (und, exp, _, typ) = quotes.get(key), meta[key]
+        if q and typ == "FUT" and (q.mid or q.last):
+            ref[(und, exp)] = q.mid or q.last
+    legs = [key for key, (und, exp, k, typ) in meta.items() if typ in ("CE", "PE") and ref.get((und, exp))
+            and abs(k / ref[(und, exp)] - 1) <= sc.band]
+    quotes.update(ctx.broker.quotes(legs))
+    out = []
+    for key, q in quotes.items():
+        if key not in meta:
+            continue
+        und, exp, k, typ = meta[key]
+        out.append((now.isoformat(sep=" "), und, str(exp) if typ != "EQ" else "", float(k or 0) if typ in ("CE", "PE")
+                    else 0.0, typ, q.bid or None, q.ask or None, q.last or None,
+                    q.bids[0].quantity if q.bids else 0, q.asks[0].quantity if q.asks else 0,
+                    sum(lv.quantity for lv in q.bids[:5]), sum(lv.quantity for lv in q.asks[:5]),
+                    int(q.volume or 0), int(q.oi or 0)))
+    store = connect(ctx.cfg.resolve(ctx.cfg.paths.market_store))
+    try:
+        store.executemany("INSERT OR REPLACE INTO quote_snap_rows VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)", out)
+        store.commit()
+    finally:
+        store.close()
+    log.info("quote snapshot: %d quotes (%d options)", len(out), len(legs))
+    return len(out)
+
+
+def compact_snapshots(ctx) -> int:
+    """Move staged snapshot rows into one compressed blob per contract-day (merging with any blob
+    already there). Returns the number of quotes compacted."""
+    from . import barcodec
+
+    store = connect(ctx.cfg.resolve(ctx.cfg.paths.market_store))
+    try:
+        rows = store.execute("SELECT ts, symbol, expiration, strike, cp, bid, ask, last, bid_qty, ask_qty, "
+                             "bid_depth, ask_depth, volume, oi FROM quote_snap_rows "
+                             "ORDER BY symbol, expiration, strike, cp, ts").fetchall()
+        groups: Dict[tuple, list] = {}
+        for r in rows:
+            groups.setdefault((r[1], r[2], r[3], r[4], r[0][:10]), []).append(r)
+        names = [c for c, _, _ in barcodec.QUOTE_COLS]
+        for (sym, exp, k, cp, d), rs in groups.items():
+            cols = {"minute": [int(r[0][11:13]) * 60 + int(r[0][14:16]) for r in rs],
+                    "bid": [r[5] or 0.0 for r in rs], "ask": [r[6] or 0.0 for r in rs], "last": [r[7] or 0.0 for r in rs],
+                    "bid_qty": [r[8] or 0 for r in rs], "ask_qty": [r[9] or 0 for r in rs],
+                    "bid_depth": [r[10] or 0 for r in rs], "ask_depth": [r[11] or 0 for r in rs],
+                    "volume": [r[12] or 0 for r in rs], "oi": [r[13] or 0 for r in rs]}
+            old = store.execute("SELECT data FROM quote_snaps WHERE symbol=? AND expiration=? AND strike=? AND cp=? "
+                                "AND date=?", (sym, exp, k, cp, d)).fetchone()
+            if old:
+                prev = barcodec.decode(old[0])
+                merged = {int(m): [prev[c][i] for c in names] for i, m in enumerate(prev["minute"])}
+                for i, m in enumerate(cols["minute"]):
+                    merged[m] = [cols[c][i] for c in names]
+                order = sorted(merged)
+                cols = {c: [merged[m][j] for m in order] for j, c in enumerate(names)}
+            store.execute("INSERT OR REPLACE INTO quote_snaps VALUES (?,?,?,?,?,?,?)",
+                          (sym, exp, k, cp, d, len(cols["minute"]), barcodec.encode(cols, b"Q")))
+        store.execute("DELETE FROM quote_snap_rows")
+        store.commit()
+    finally:
+        store.close()
+    if rows:
+        log.info("compacted %d snapshot quotes into %d contract-days", len(rows), len(groups))
+    return len(rows)

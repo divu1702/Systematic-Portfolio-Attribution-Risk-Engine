@@ -93,7 +93,7 @@ def test_nse_loader_recovers_the_volatility_and_spreads(study, nse_db):
     assert (rel[candle] < 0.09).mean() > 0.95                        # not the 10% assumption
     assert set(earn.symbol) == {"AAA"} and str(earn.date.iloc[0].date()) == "2026-02-10"
     assert ("BBB", "2026-03-10") in {(s, str(d.date())) for s, d in zip(splits.symbol, splits.ex_date)}
-    assert "recorded quotes" in note and "candle closes" in note
+    assert "recorded quotes" in note and "candle prices" in note
 
 
 def pd_ts(d):
@@ -162,8 +162,14 @@ def test_study_reads_what_the_archiver_and_recorder_save(study, mock_ctx, capsys
                           "WHERE bid > 0 AND ask > bid)").fetchone()[0]
     conn.close()
     assert n_candles > 0 and n_quotes > 0
+    conn = sqlite3.connect(db)
+    ip = study.intraday_prices(conn)
+    conn.close()
+    stale = int(ip.stale.sum())
+    assert len(ip) > 0 and 0 < stale < 0.2 * len(ip)                 # thin strikes: no trade near 15:00 some days
     bars, chains, earn, splits, note = study.load_nse(db)
-    assert len(chains) >= 0.98 * n_keys                              # one row per option-day, nearly all priced
+    assert len(chains) >= 0.98 * (n_keys - stale)                    # one row per option-day, nearly all priced
+    assert f"{len(ip) - stale:,} of them at the trade nearest 15:00" in note
     assert not chains.duplicated(["date", "symbol", "expiration", "strike", "cp"]).any()
     assert chains.iv.between(0.05, 2.0).mean() > 0.95
     today = chains.date == pd_ts(ctx.clock.today())
@@ -172,3 +178,50 @@ def test_study_reads_what_the_archiver_and_recorder_save(study, mock_ctx, capsys
     assert "No completed holding windows yet" in capsys.readouterr().out
     from app.fmt import set_currency
     set_currency("INR")
+
+
+def test_intraday_prices_use_synchronous_futures_and_drop_stale_prints(study, tmp_path):
+    """A rising futures price through the day: an option that last traded at 14:45 is priced
+    against the futures at 14:45 (its IV comes out right); one that traded only at 13:00 is
+    dropped instead of being compared with the 15:29 futures close."""
+    from app.data import barcodec
+
+    d, e = date(2026, 3, 2), date(2026, 3, 31)
+    conn = connect(tmp_path / "intraday.db")
+    t0 = datetime.combine(d, time(9, 15))
+    fut = [{"date": t0 + timedelta(minutes=m), "open": 1000 + m * 0.08, "high": 1000 + m * 0.08,
+            "low": 1000 + m * 0.08, "close": 1000 + m * 0.08, "volume": 500, "oi": 0} for m in range(375)]
+    fmin = {c["date"].hour * 60 + c["date"].minute: c["close"] for c in fut}
+    conn.execute("INSERT INTO future_bars VALUES (?,?,?,?,?,?)",
+                 ("AAA", str(e), str(d), "minute", len(fut), barcodec.encode(barcodec.candle_columns(fut))))
+    fc = barcodec.daily_from(fut)
+    conn.execute("INSERT INTO future_candles VALUES (?,?,?,?,?,?,?,?,?)",
+                 (str(d), "AAA", str(e), fc["open"], fc["high"], fc["low"], fc["close"], fc["volume"], 0))
+    conn.execute("INSERT INTO bars VALUES (?,?,?,?,?,?,?)", ("AAA", str(d), 1000, 1031, 999, 1029.8, 10**6))
+
+    def trade(k, cp, hhmm):
+        m = hhmm[0] * 60 + hhmm[1]
+        T = ((e - d).days * 1440 + (930 - (m + 1))) / (365 * 1440)
+        px = round(black76.price(fmin[m], k, T, SIGMA, R, cp), 2)
+        return {"date": datetime.combine(d, time(*hhmm)), "open": px, "high": px, "low": px, "close": px,
+                "volume": 250, "oi": 0}
+
+    for k, cp, times in ((1000.0, "CE", [(14, 50), (15, 29)]), (1050.0, "CE", [(14, 45)]), (950.0, "PE", [(13, 0)])):
+        cs = [trade(k, cp, t) for t in times]
+        conn.execute("INSERT INTO option_bars VALUES (?,?,?,?,?,?,?,?,?)",
+                     ("AAA", str(e), k, cp, str(d), "minute", len(cs), 250, barcodec.encode(barcodec.candle_columns(cs))))
+        dc = barcodec.daily_from(cs)
+        conn.execute("INSERT INTO option_candles VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                     (str(d), "AAA", str(e), k, cp, dc["open"], dc["high"], dc["low"], dc["close"], dc["volume"], 0, 250))
+    conn.commit()
+    conn.close()
+    bars, chains, earn, splits, note = study.load_nse(tmp_path / "intraday.db", r=R)
+    got = {(row.strike, row.cp): row.iv for row in chains.itertuples()}
+    assert set(got) == {(1000.0, "CE"), (1050.0, "CE")}                 # the 13:00-only put is dropped
+    assert got[(1050.0, "CE")] == pytest.approx(SIGMA, abs=0.003)         # 14:45 trade vs 14:45 futures
+    assert got[(1000.0, "CE")] == pytest.approx(SIGMA, abs=0.003)         # 14:50 is nearer 15:00 than 15:29
+    assert "1 option-days dropped" in note
+    row = chains[chains.strike == 1050].iloc[0]
+    daily_iv = study.implied_vol_vec(np.array([(row.bid + row.ask) / 2]), np.array([fc["close"]]), np.array([1050.0]),
+                                     np.array([29 / 365]), R, np.array([True]))[0]
+    assert abs(daily_iv - SIGMA) > 0.01      # daily candles only: the 14:45 trade meets the 15:29 futures close

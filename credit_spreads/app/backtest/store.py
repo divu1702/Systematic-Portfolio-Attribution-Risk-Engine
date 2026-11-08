@@ -4,7 +4,8 @@ dates and splits. One SQLite file per market, separate from the trading database
 Two writers fill it: the DoltHub loader (US end-of-day data) and the live recorder
 (app/data/market_recorder.py), which saves every 15:00 scan's Kite quotes so NSE history with
 real bid/ask, depth, OI, volume and lot sizes builds up while paper trading. The optional
-tables (chain_extras, futures, events_seen, sectors) are only written by the recorder."""
+tables (chain_extras, futures, events_seen, sectors, quote snapshots) are only written by the recorder;
+option_candles, future_candles, option_bars, future_bars and archive_* by the history archiver."""
 
 from __future__ import annotations
 
@@ -65,6 +66,32 @@ CREATE TABLE IF NOT EXISTS future_candles (       -- archiver: per expiry, or ex
 CREATE TABLE IF NOT EXISTS archive_log (          -- archiver: what has been fetched, for resuming
     kind TEXT NOT NULL, key TEXT NOT NULL, archived_at TEXT NOT NULL, rows INTEGER NOT NULL,
     PRIMARY KEY (kind, key)
+);
+CREATE TABLE IF NOT EXISTS option_bars (          -- archiver: intraday candles, one blob per contract-day
+    symbol TEXT NOT NULL, expiration TEXT NOT NULL, strike REAL NOT NULL, cp TEXT NOT NULL, date TEXT NOT NULL,
+    interval TEXT NOT NULL, n INTEGER NOT NULL, lot INTEGER, data BLOB NOT NULL,   -- app/data/barcodec.py
+    PRIMARY KEY (symbol, expiration, strike, cp, date)
+);
+CREATE INDEX IF NOT EXISTS ix_option_bars_date ON option_bars (date);
+CREATE TABLE IF NOT EXISTS future_bars (          -- archiver: intraday futures candles per contract-day
+    symbol TEXT NOT NULL, expiration TEXT NOT NULL, date TEXT NOT NULL,
+    interval TEXT NOT NULL, n INTEGER NOT NULL, data BLOB NOT NULL,
+    PRIMARY KEY (symbol, expiration, date)
+);
+CREATE TABLE IF NOT EXISTS archive_progress (     -- archiver: how far each contract's history is saved
+    tradingsymbol TEXT PRIMARY KEY, kind TEXT NOT NULL, symbol TEXT NOT NULL, expiration TEXT NOT NULL,
+    last_date TEXT, requests INTEGER NOT NULL DEFAULT 0, final INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS quote_snap_rows (      -- recorder: today's intraday quote snapshots, before compaction
+    ts TEXT NOT NULL, symbol TEXT NOT NULL, expiration TEXT NOT NULL, strike REAL NOT NULL, cp TEXT NOT NULL,
+    bid REAL, ask REAL, last REAL, bid_qty INTEGER, ask_qty INTEGER, bid_depth INTEGER, ask_depth INTEGER,
+    volume INTEGER, oi INTEGER,
+    PRIMARY KEY (ts, symbol, expiration, strike, cp)
+);
+CREATE TABLE IF NOT EXISTS quote_snaps (          -- recorder: intraday quote snapshots, one blob per contract-day
+    symbol TEXT NOT NULL, expiration TEXT NOT NULL, strike REAL NOT NULL, cp TEXT NOT NULL, date TEXT NOT NULL,
+    n INTEGER NOT NULL, data BLOB NOT NULL,       -- cp FUT or EQ for futures and the stock (strike 0)
+    PRIMARY KEY (symbol, expiration, strike, cp, date)
 );
 """
 

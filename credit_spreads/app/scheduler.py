@@ -3,7 +3,9 @@
 08:30 instrument master, holidays, sectors   08:45 events
 09:00 login reminder (if no valid Kite session)   09:20 gap check
 every 5 min 09:25-15:30 monitor (15:15 = thesis check)   15:00 scan + entries
-15:35 end of day: candles, levels, turnover, events, equity   weekly report (milestone 7)
+every 15 min 09:32-15:17 quote snapshots for backtests (snapshots.every_min)
+15:35 end of day: candles, levels, turnover, events, equity   16:10 history archiver
+weekly report (milestone 7)
 
 Jobs never overlap (one lock), a job that raises sends an alert instead of killing the
 scheduler, and market jobs are skipped without a valid broker session.
@@ -93,7 +95,24 @@ def job_specs(ctx) -> List[Tuple[str, Dict, Callable, bool]]:
         ("weekly_report", {**hm(ctx.cfg.reporting.weekly_time), "day_of_week": ctx.cfg.reporting.weekly_day},
          lambda: weekly_report_job(ctx), False),
         ("archive", hm(s.archive), lambda: archive_job(ctx), True),
-    ]
+    ] + ([("snapshots", {"hour": "9-15", "minute": f"{ctx.cfg.snapshots.offset_min}-59/{ctx.cfg.snapshots.every_min}"},
+           lambda: snapshot_job(ctx), True)] if ctx.cfg.snapshots.every_min else [])
+
+
+def snapshot_job(ctx) -> int:
+    """Intraday quote snapshot (market_recorder.snapshot_quotes). Recording must never disturb
+    trading: failures are logged, and alerted at most once a day."""
+    from .data.market_recorder import snapshot_quotes
+
+    try:
+        return snapshot_quotes(ctx)
+    except Exception as exc:
+        log.warning("quote snapshot failed: %s", exc)
+        key = f"snapshot_alert_{ctx.clock.today()}"
+        if not ctx.cache.get(key):
+            ctx.cache[key] = True
+            ctx.notifier.send(f"Quote snapshots failing today (trading unaffected): {exc}", "warning")
+        return 0
 
 
 def archive_job(ctx):
@@ -101,7 +120,9 @@ def archive_job(ctx):
     from .data.history_archiver import run_archive
 
     rep = run_archive(ctx)
-    if rep.expiring or (rep.requests and not rep.pending):
+    if rep.urgent or rep.missed:
+        ctx.notifier.send(rep.text(), "warning")
+    elif rep.expiring:
         ctx.notifier.send(rep.text(), "info")
     return rep
 

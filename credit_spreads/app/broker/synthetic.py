@@ -31,6 +31,8 @@ from ..analytics import black76
 from ..clock import Clock
 
 BARS = 75                      # 5-minute bars per session, 09:15-15:30
+INTRADAY_MINUTES = {"minute": 1, "3minute": 3, "5minute": 5, "10minute": 10, "15minute": 15,
+                    "30minute": 30, "60minute": 60}
 BAR = timedelta(minutes=5)
 OPEN_T = time(9, 15)
 CLOSE_T = time(15, 30)
@@ -439,20 +441,46 @@ class SyntheticMarket:
                             "close": round(prices[-1], 2),
                             "volume": int(self.spec(info.name).liq_lots * 4) * info.lot, "oi": 0})
             return out
-        if interval != "5minute":
-            raise ValueError(f"synthetic market supports 'day' and '5minute' candles, not {interval!r}")
+        step = INTRADAY_MINUTES.get(interval)
+        if step is None:
+            raise ValueError(f"synthetic market has no {interval!r} candles")
+        lot = info.lot if info.kind not in ("EQ", "INDEX") else 1
+        spec = self.spec(info.name)
+        session = BARS * 5
         for d in self.days:
             if d < start.date() or d > end.date():
                 continue
+            if info.expiry and d > info.expiry:
+                break
             di = self.day_index[d]
-            for j in range(BARS):
-                t0 = self.bar_time(di, j)
-                if t0 < start or t0 + BAR > end:
+            closes = [self.price_at(info, di, j) for j in range(BARS + 1)]        # 5-minute marks
+            path = np.interp(np.arange(session + 1), np.arange(0, session + 1, 5), closes)
+            act = self.activity(info, di)
+            traded = (np.random.default_rng(_crc(self.seed, "trades", info.token, di)).random(session) < act
+                      if interval == "minute" else np.ones(session, bool))        # Kite: no candle without a trade
+            vol = int(max(1, round(spec.liq_lots * act * step / 75))) * lot
+            oi = (int(spec.liq_lots * 3 * act) if info.kind in ("CE", "PE")
+                  else int(spec.liq_lots * 20) if info.kind == "FUT" else 0) * lot
+            for m0 in range(0, session, step):
+                t0 = datetime.combine(d, OPEN_T) + timedelta(minutes=m0)
+                if t0 < start or t0 + timedelta(minutes=step) > end or not traded[m0]:
                     continue
-                o, c = self.price_at(info, di, j), self.price_at(info, di, j + 1)
-                out.append({"date": t0, "open": round(o, 2), "high": round(max(o, c), 2),
-                            "low": round(min(o, c), 2), "close": round(c, 2), "volume": 0, "oi": 0})
+                seg = path[m0:m0 + step + 1]
+                out.append({"date": t0, "open": round(float(seg[0]), 2), "high": round(float(seg.max()), 2),
+                            "low": round(float(seg.min()), 2), "close": round(float(seg[-1]), 2),
+                            "volume": vol, "oi": oi})
         return out
+
+    def activity(self, info: InstrumentInfo, di: int) -> float:
+        """Share of minutes an instrument trades: stocks and futures always, options less the further
+        they are from the money (like the quote's liquidity)."""
+        if info.kind not in ("CE", "PE"):
+            return 1.0
+        S = float(self.paths[info.name][di, 0])
+        ts = self.bar_time(di, 0)
+        T = max(black76.year_fraction((datetime.combine(info.expiry, CLOSE_T) - ts).total_seconds()), 1e-4)
+        z = abs(math.log(info.strike / S)) / (self.atm_vol(info.name, ts) * math.sqrt(T))
+        return min(1.0, 0.02 + 0.98 * math.exp(-(z / 0.6) ** 2))
 
     # ------------------------------------------------------------------ exchange-side data
     def announced_events(self, as_of: date, ahead_days: int = 60, behind_days: int = 120) -> List[dict]:

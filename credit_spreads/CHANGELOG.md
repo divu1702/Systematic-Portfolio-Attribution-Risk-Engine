@@ -18,9 +18,21 @@ setting away.
 
 ### Indian data collection
 - Kite history archiver (`python -m app archive`, nightly at 16:10 within `archive.max_requests_per_run`):
-  backfills daily candles for listed stock options within +-25% of the price, every listed futures
-  contract, continuous futures and up to 2,000 days of stock bars, then tops up each monthly series in its
-  last 3 trading days before Kite drops it. Resumable; respects Kite's rate limit.
+  saves candles of listed stock options within +-25% of the price and every listed futures contract
+  before Kite drops them, plus continuous futures and up to 2,000 days of stock bars. Resumable;
+  respects Kite's rate limit.
+- Owner decision, 8 Nov 2026: archive at 1-minute resolution (`archive.interval: minute`), because
+  expired contracts cannot be fetched again and 1-minute data can always be turned into coarser data.
+  Each contract is fetched twice (first pass at 45 days left, `archive.first_pass_dte`; final pass in
+  its last 3 trading days), which fits Kite's 60-day limit per 1-minute request; a missed final pass is
+  reported. Only traded minutes are stored, compressed per contract-day (`app/data/barcodec.py`);
+  daily candles are derived from them. The request budget counts real Kite requests after splitting
+  at Kite's span limits; `max_requests_per_run` raised from 5,000 to 12,000.
+- Intraday quote snapshots (`snapshots:`): every 15 minutes in the session, bid/ask, sizes, volume
+  and OI for options within +-15% of the futures price in each stock's two nearest series, plus
+  futures and stocks; compacted after the close. Failures never disturb trading.
+- The study prices each option at its trade nearest 15:00 against the futures at the same minute,
+  and drops option-days with no trade near 15:00.
 - The research study runs on Indian data (`research/option_selling_study.py --market nse`): IV and delta
   from daily option closes against the same expiry's futures (vectorised Black-76), bid/ask from recorded
   quotes or from spreads learnt from them, results dates as first seen, and windows across bonus, split,

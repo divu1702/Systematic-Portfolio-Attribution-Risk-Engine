@@ -303,11 +303,39 @@ class OpsCfg(_Section):
 class ArchiveCfg(_Section):
     """Kite history archiver (app/data/history_archiver.py)."""
     enabled: bool = True
+    interval: Literal["minute", "3minute", "5minute", "10minute", "15minute", "30minute", "60minute",
+                      "day"] = "minute"                     # options and futures; daily rows are derived
     band: Annotated[float, Field(gt=0, le=1)] = 0.25       # option strikes within +-25% of the stock price
-    max_expiries: PosInt = 3                                # listed monthly series to backfill
-    days_before_expiry: PosInt = 3                          # top up a series in its last N trading days
-    max_requests_per_run: PosInt = 5000                     # ~28 minutes at Kite's 3 requests a second
+    max_expiries: PosInt = 3                                # listed monthly series to follow
+    first_pass_dte: PosInt = 45                             # first fetch when this many calendar days remain
+    days_before_expiry: PosInt = 3                          # final fetch in a series' last N trading days
+    max_requests_per_run: PosInt = 12000                    # ~67 minutes at Kite's 3 requests a second
     equity_days: Annotated[int, Field(ge=30, le=2000)] = 2000
+
+
+class SnapshotCfg(_Section):
+    """Intraday quote snapshots for the strikes the strategy trades (app/data/market_recorder.py)."""
+    every_min: NonNegInt = 15                               # 0 = off; must divide 60
+    offset_min: NonNegInt = 2                               # minutes past the grid, clear of the monitor
+    start: str = "09:30"
+    end: str = "15:25"
+    band: Annotated[float, Field(gt=0, le=1)] = 0.15       # strikes within +-15% of the stock price
+    expiries: PosInt = 2                                    # nearest monthly series
+
+    @field_validator("start", "end")
+    @classmethod
+    def _hhmm(cls, v: str) -> str:
+        if not _HHMM.match(v):
+            raise ValueError(f"expected HH:MM (24h IST), got {v!r}")
+        return v
+
+    @model_validator(mode="after")
+    def _grid(self) -> "SnapshotCfg":
+        if self.every_min and (60 % self.every_min or self.offset_min >= self.every_min):
+            raise ValueError("snapshots.every_min must divide 60 and offset_min must be below it")
+        if self.start >= self.end:
+            raise ValueError("snapshots.start must be before snapshots.end")
+        return self
 
 
 class PathsCfg(_Section):
@@ -351,6 +379,7 @@ class Config(_Section):
     costs: CostsCfg = CostsCfg()
     market: MarketCfg = MarketCfg()
     archive: ArchiveCfg = ArchiveCfg()
+    snapshots: SnapshotCfg = SnapshotCfg()
     ops: OpsCfg = OpsCfg()
     paths: PathsCfg = PathsCfg()
 

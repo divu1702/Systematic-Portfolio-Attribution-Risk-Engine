@@ -26,6 +26,7 @@ from __future__ import annotations
 import math
 import sqlite3
 import sys
+from datetime import date
 from pathlib import Path
 
 import numpy as np
@@ -118,10 +119,10 @@ def implied_vol_vec(px, F, K, T, r, is_call, lo=0.01, hi=5.0, iters=50):
     return iv
 
 
-def _with_iv(df: pd.DataFrame, price, F, r: float) -> pd.DataFrame:
+def _with_iv(df: pd.DataFrame, price, F, r: float, T=None) -> pd.DataFrame:
     if df.empty:
         return df.assign(iv=pd.Series(dtype=float), delta=pd.Series(dtype=float))
-    T = (df.expiration - df.date).dt.days.values / 365.0
+    T = (df.expiration - df.date).dt.days.values / 365.0 if T is None else np.asarray(T, float)
     K, F, price = df.strike.values.astype(float), np.asarray(F, float), np.asarray(price, float)
     is_call = (df.cp == "CE").values
     iv = implied_vol_vec(price, F, K, T, r, is_call)
@@ -131,15 +132,50 @@ def _with_iv(df: pd.DataFrame, price, F, r: float) -> pd.DataFrame:
 
 
 DBINS = [0.0, 0.10, 0.20, 0.30, 0.40, 0.60, 1.01]
+STEP = {"minute": 1, "3minute": 3, "5minute": 5, "10minute": 10, "15minute": 15, "30minute": 30, "60minute": 60}
+
+
+def intraday_prices(conn, at: int = 900, window: int = 30) -> pd.DataFrame:
+    """Per option-day with archived intraday candles: the trade closest to `at` (minutes after
+    midnight, 900 = 15:00, when the strategy scans) within +-`window` minutes, and the same
+    expiry's futures price at that minute. Synchronous prices keep a stale option print from
+    distorting IV. Columns: date, symbol, expiration, strike, cp, px, fwd, T (years), stale (False
+    when a trade was found; True rows are option-days with candles but none near `at`)."""
+    from app.data import barcodec
+
+    fut = {}
+    for sym, exp, d, interval, blob in conn.execute("SELECT symbol, expiration, date, interval, data FROM future_bars"):
+        fut[(sym, exp, d)] = (barcodec.decode(blob), STEP.get(interval, 1))
+    rows = []
+    for sym, exp, k, cp, d, interval, blob in conn.execute(
+            "SELECT symbol, expiration, strike, cp, date, interval, data FROM option_bars"):
+        step = STEP.get(interval, 1)
+        c = barcodec.decode(blob)
+        i = barcodec.at_minute(c, at - step, window)              # candle whose close is nearest `at`
+        f = fut.get((sym, exp, d))
+        j = barcodec.at_minute(f[0], int(c["minute"][i]), 15) if i >= 0 and f else -1
+        if j < 0:
+            rows.append((d, sym, exp, k, cp, np.nan, np.nan, np.nan, True))
+            continue
+        close_min = int(c["minute"][i]) + step
+        days = (date.fromisoformat(exp) - date.fromisoformat(d)).days
+        T = (days * 1440 + (15 * 60 + 30 - close_min)) / (365.0 * 1440)
+        rows.append((d, sym, exp, k, cp, float(c["close"][i]), float(f[0]["close"][j]), T, False))
+    df = pd.DataFrame(rows, columns=["date", "symbol", "expiration", "strike", "cp", "px", "fwd", "T", "stale"])
+    df["date"], df["expiration"] = pd.to_datetime(df["date"]), pd.to_datetime(df["expiration"])
+    return df
 CAPITAL_EVENTS = ("bonus", "split", "rights", "demerger")
 
 
-def load_nse(db: Path, assume_spread: float = 0.04, r: float = 0.065, tick: float = 0.05, min_obs: int = 20):
+def load_nse(db: Path, assume_spread: float = 0.04, r: float = 0.065, tick: float = 0.05, min_obs: int = 20,
+             at: int = 900, window: int = 30):
     """The Indian store in the same shapes as load(): bars, chains, earnings, splits, plus a note.
 
     Option rows come from two writers. Recorded 15:00 quotes (real bid/ask) are used as they are.
-    Archived daily candles fill the other days, priced at the day's close (the last trade, so thin
-    strikes can be stale; only days with volume are kept). Their bid/ask is the close +- half the
+    Archived candles fill the other days. With intraday candles, an option-day is priced at the trade
+    closest to 15:00 (`at`, within +-`window` minutes) against the futures at the same minute, and
+    dropped if it did not trade near 15:00. Without them (archive.interval = day), at the day's close
+    (the last trade, so thin strikes can be stale; only days with volume). Their bid/ask is the price +- half the
     median relative spread recorded for that stock and delta bucket (at least `min_obs` quotes),
     else for that delta bucket across stocks, else `assume_spread`. The forward is the same expiry's
     futures: candle close for candle rows, recorded quote for quote rows, else spot * e^(rT).
@@ -164,6 +200,7 @@ def load_nse(db: Path, assume_spread: float = 0.04, r: float = 0.065, tick: floa
     fq = q("SELECT date, symbol, expiration, CASE WHEN bid > 0 AND ask > 0 THEN (bid + ask) / 2 ELSE last END "
            "AS fwd FROM futures", ["date", "expiration"])
     ev = q("SELECT symbol, event_date AS date, event_type FROM events_seen", ["date"])
+    ip = intraday_prices(conn, at, window)
     conn.close()
     spot = bars[["symbol", "date", "close"]].rename(columns={"close": "spot"})
 
@@ -179,8 +216,20 @@ def load_nse(db: Path, assume_spread: float = 0.04, r: float = 0.065, tick: floa
     rec["dbin"] = pd.cut(rec.delta.abs(), DBINS, right=False, labels=False)
     oc = oc.merge(rec[keys], on=keys, how="left", indicator=True)
     oc = oc[oc._merge == "left_only"].drop(columns="_merge")
+    n_stale = 0
+    if len(ip):
+        oc = oc.merge(ip.rename(columns={"px": "px_i", "fwd": "fwd_i"}), on=keys, how="left")
+        stale = oc.stale.fillna(False).astype(bool)
+        n_stale = int(stale.sum())
+        oc = oc[~stale].reset_index(drop=True)
+    else:
+        oc = oc.assign(px_i=np.nan, fwd_i=np.nan, T=np.nan)
     oc, F = forward(oc, fc)
-    oc = _with_iv(oc, oc.px.values, F, r)
+    synced = oc.px_i.notna().values
+    oc["px"] = np.where(synced, oc.px_i, oc.px)
+    F = np.where(synced, oc.fwd_i, F)
+    T_day = (oc.expiration - oc.date).dt.days.values / 365.0
+    oc = _with_iv(oc, oc.px.values, F, r, np.where(synced, oc["T"], T_day))
     oc["dbin"] = pd.cut(oc.delta.abs(), DBINS, right=False, labels=False)
     by_sym = rec.groupby(["symbol", "dbin"]).rel.agg(["median", "size"])
     by_sym = by_sym[by_sym["size"] >= min_obs]["median"].rename("rel_sym").reset_index()
@@ -202,7 +251,9 @@ def load_nse(db: Path, assume_spread: float = 0.04, r: float = 0.065, tick: floa
     cap = pd.concat([cap, b.loc[(jump < 0.6) | (jump > 1.67), ["symbol", "date"]]])
     splits = cap.rename(columns={"date": "ex_date"}).drop_duplicates().assign(to_factor=1.0, for_factor=1.0)
     n_sym, n_bin = int(oc.rel_sym.notna().sum()), int((oc.rel_sym.isna() & oc.rel_bin.notna()).sum())
-    note = (f"Indian data: {len(rec):,} recorded quotes (real bid/ask) and {len(oc):,} candle closes; candle "
+    note = (f"Indian data: {len(rec):,} recorded quotes (real bid/ask) and {len(oc):,} candle prices, "
+            f"{int(synced.sum()):,} of them at the trade nearest {at // 60:02d}:{at % 60:02d} with the futures at the "
+            f"same minute; {n_stale:,} option-days dropped for no trade within {window} minutes of it; candle "
             f"spreads from recorded quotes of the same stock for {n_sym:,}, of all stocks for {n_bin:,}, assumed "
             f"{assume_spread:.0%} of the price for {len(oc) - n_sym - n_bin:,}. Rows without a valid IV are "
             f"dropped, leaving {len(chains):,}. Results dates as recorded: {len(earn):,}. Windows across "
@@ -518,10 +569,14 @@ def main(argv=None) -> None:
                     help="NSE only: bid-ask as a fraction of price where no quote was recorded")
     ap.add_argument("--levels-step", type=int, default=2, help="evaluate levels every Nth day (speed)")
     ap.add_argument("--risk-free", type=float, default=0.065, help="NSE only: rate for Black-76 (as config.yaml)")
+    ap.add_argument("--at", default="15:00", help="NSE only: price options at the trade nearest this time (HH:MM)")
+    ap.add_argument("--window", type=int, default=30, help="NSE only: ... within this many minutes, else drop")
     args = ap.parse_args(argv)
     if args.market == "nse":
         db = args.db or ROOT / "data" / "market_nse.db"
-        bars, chains, earn, splits, notes = load_nse(db, args.assume_spread, args.risk_free)
+        hh, mm = (int(x) for x in args.at.split(":"))
+        bars, chains, earn, splits, notes = load_nse(db, args.assume_spread, args.risk_free, at=hh * 60 + mm,
+                                                     window=args.window)
         title = "Option-selling study on Indian data (NSE, recorded by this system)"
     else:
         db = args.db or DB

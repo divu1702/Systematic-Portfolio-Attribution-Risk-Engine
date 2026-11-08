@@ -76,6 +76,11 @@ is meant to ensure.
 ## Next improvements
 
 ### Evidence and research
+- **Intraday NSE replay.** Once a few months of 1-minute candles and quote snapshots exist, replay
+  the 5-minute monitor on them (stops and targets at the marks they run on live, fills from the
+  nearest snapshot's bid/ask) instead of once a day at the close.
+- **Stocks' intraday history.** Kite keeps years of it; fetch it for the replay window when the
+  intraday replay is built (about 34 requests per stock for 2,000 days).
 - **Start paper trading early, even before trades are expected.** The live recorder builds an NSE
   history with real bid/ask and depth from day one; after about three months it can be replayed with
   `backtest run --market nse`.
@@ -114,3 +119,5 @@ is meant to ensure.
 - Kite history archiver: nightly saving of listed option and futures candles before expiry, plus a
   one-off backfill (`python -m app archive`).
 - Research study ported to Indian data (`--market nse`), ready to run as the archive grows.
+- Archive at 1-minute resolution in two passes per contract, compressed; intraday quote snapshots
+  for the strategy's strikes; the study prices options at their trade nearest 15:00.

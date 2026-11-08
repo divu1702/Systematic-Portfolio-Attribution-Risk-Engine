@@ -115,11 +115,20 @@ costs:                 # update when broker or exchange rates change
   gst: 0.18
 archive:                     # + save Kite option history before it disappears (no history for expired options)
   enabled: true
+  interval: minute           # options and futures; daily candles are derived from these. "day" = daily only
   band: 0.25                 # strikes within +-25% of the stock price
   max_expiries: 3
-  days_before_expiry: 3      # top up each monthly series in its last 3 trading days
-  max_requests_per_run: 5000 # ~28 minutes a night at 3 requests a second
+  first_pass_dte: 45         # each contract is fetched when ~45 days remain (everything since listing) ...
+  days_before_expiry: 3      # ... and again in its series' last 3 trading days
+  max_requests_per_run: 12000  # ~67 minutes at most at 3 requests a second; the rest continues next run
   equity_days: 2000
+snapshots:                   # + intraday bid/ask for the strikes the strategy trades (needs the Kite session)
+  every_min: 15              # 0 = off. 09:32, 09:47, ... (offset from the 5-minute monitor)
+  offset_min: 2
+  start: "09:30"
+  end: "15:25"
+  band: 0.15                 # strikes within +-15% of the stock price
+  expiries: 2                # nearest monthly series
 ops: {backup_keep: 14, heartbeat: true, record_market: true}   # + backups; EOD alert; record quotes for backtests
 market: {name: nse, currency: INR}                    # + backtests on other markets override this
 paths:                                                # + relative to this file's folder

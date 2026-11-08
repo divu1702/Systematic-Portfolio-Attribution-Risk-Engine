@@ -31,6 +31,11 @@ class Level:
     quantity: int
 
 
+# Longest span Kite serves in one historical request, by interval (days).
+HIST_MAX_DAYS = {"minute": 60, "3minute": 100, "5minute": 100, "10minute": 100, "15minute": 200,
+                 "30minute": 200, "60minute": 400, "day": 2000}
+
+
 @dataclass(frozen=True)
 class Quote:
     key: str
