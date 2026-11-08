@@ -191,6 +191,21 @@ def backtest_summary(run) -> str:
     if total_q:
         lines.append(f"Option quotes from data {b.real_quotes:,}, modelled (leg outside the day's sample) "
                      f"{b.modelled_quotes:,} ({b.modelled_quotes / total_q:.1%})")
+    if len(closed) >= 4:
+        mid = trading[len(trading) // 2]
+        lines += ["", f"Stability: first half vs second half of the trading period (split at {mid})"]
+        for label, part in (("first half ", [t for t in closed if t.entry_ts.date() < mid]),
+                            ("second half", [t for t in closed if t.entry_ts.date() >= mid])):
+            if not part:
+                lines.append(f"  {label}  no trades")
+                continue
+            w = sum(1 for t in part if t.pnl_net > 0) / len(part)
+            exp = (sum(t.pnl_net for t in part) / len(part)) / (sum(t.max_loss for t in part) / len(part))
+            gw = sum(t.pnl_net for t in part if t.pnl_net > 0)
+            gl = -sum(t.pnl_net for t in part if t.pnl_net < 0)
+            pf = f"{gw / gl:.2f}" if gl else "inf"
+            lines.append(f"  {label}  {len(part):>3} trades, win {w:.0%}, expectancy {exp:+.1%} of max loss, "
+                         f"profit factor {pf}, net {inr(sum(t.pnl_net for t in part))}")
     lines += ["", "Go-live scorecard"]
     for m in metrics.go_live(ctx.engine, ctx.cfg.capital, closed):
         status = "reported" if m.passed is None else ("PASS" if m.passed else "fail")

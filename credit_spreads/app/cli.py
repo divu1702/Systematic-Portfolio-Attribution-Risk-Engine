@@ -288,7 +288,7 @@ def _cmd_backtest(args: argparse.Namespace) -> int:
         print(f"\nloaded {n:,} option quotes")
         return 0
     bt_cfg = apply_overrides(runner.us_config(cfg, capital=args.capital), args.set)
-    days = runner.trading_days(store, start, end)
+    days = runner.trading_days(store, start, end, symbols=list(universe))
     if len(days) <= args.warmup:
         print(f"only {len(days)} trading days with data in range; need more than the {args.warmup}-day warm-up")
         return 1

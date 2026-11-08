@@ -52,19 +52,27 @@ def us_config(cfg: Config, capital: float = 100_000.0, per_contract: float = 0.7
     })
 
 
-def trading_days(store_path: Path, start: date, end: date, min_share: float = 0.5) -> List[date]:
-    """Days in range where most symbols have a bar and option chains were loaded."""
+def trading_days(store_path: Path, start: date, end: date, min_share: float = 0.5,
+                 symbols: Optional[Sequence[str]] = None) -> List[date]:
+    """Days in range where most of the universe's symbols have a bar and loaded option chains."""
     conn = sqlite3.connect(f"file:{store_path}?mode=ro", uri=True)
     try:
-        n_sym = conn.execute("SELECT COUNT(DISTINCT symbol) FROM bars").fetchone()[0] or 1
-        bars = {r[0]: r[1] for r in conn.execute(
-            "SELECT date, COUNT(*) FROM bars WHERE date BETWEEN ? AND ? GROUP BY date", (str(start), str(end)))}
-        chains = {r[0] for r in conn.execute(
-            "SELECT date FROM chain_days_loaded WHERE rows > 0 AND date BETWEEN ? AND ? GROUP BY date "
-            "HAVING COUNT(*) >= ?", (str(start), str(end), max(1, int(n_sym * min_share))))}
+        if symbols is None:
+            symbols = [r[0] for r in conn.execute("SELECT DISTINCT symbol FROM bars")]
+        keep = set(symbols)
+        need = max(1, int(len(keep) * min_share))
+        bars: Dict[str, int] = {}
+        for d, sym in conn.execute("SELECT date, symbol FROM bars WHERE date BETWEEN ? AND ?", (str(start), str(end))):
+            if sym in keep:
+                bars[d] = bars.get(d, 0) + 1
+        chains: Dict[str, int] = {}
+        for d, sym in conn.execute("SELECT date, symbol FROM chain_days_loaded WHERE rows > 0 AND date BETWEEN ? AND ?",
+                                   (str(start), str(end))):
+            if sym in keep:
+                chains[d] = chains.get(d, 0) + 1
     finally:
         conn.close()
-    return sorted(date.fromisoformat(d) for d, n in bars.items() if n >= n_sym * min_share and d in chains)
+    return sorted(date.fromisoformat(d) for d, n in bars.items() if n >= need and chains.get(d, 0) >= need)
 
 
 @dataclass

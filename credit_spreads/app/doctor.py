@@ -130,6 +130,34 @@ def _db_section(r: Report, cfg: Config) -> None:
             r.row(f"table {name}", f"{n} rows")
 
 
+def _events_section(r: Report, cfg: Config) -> None:
+    """F2 fails closed on stale event data, so say how fresh it is and where it came from."""
+    import sqlite3
+    from datetime import datetime
+
+    from .clock import now_ist
+
+    r.heading("Event data (F2)")
+    imports = cfg.resolve(cfg.paths.imports) / "events"
+    files = sorted(imports.glob("*.csv")) if imports.exists() else []
+    r.row("imports/events CSVs", f"{len(files)} file(s)" + (f", newest {datetime.fromtimestamp(max(f.stat().st_mtime for f in files)):%Y-%m-%d %H:%M}" if files else ""))
+    try:
+        conn = sqlite3.connect(f"file:{cfg.db_path}?mode=ro", uri=True)
+        row = conn.execute("SELECT fetched_at, source FROM event_fetches WHERE ok=1 ORDER BY fetched_at DESC LIMIT 1").fetchone()
+        conn.close()
+    except sqlite3.Error:
+        row = None
+    if not row:
+        r.warn("last good event data", "none yet", "F2 rejects every stock until events are fetched or imported")
+        return
+    age = now_ist() - datetime.fromisoformat(str(row[0]))
+    label = f"{row[0][:16]} via {row[1]} ({age.days}d {age.seconds // 3600}h ago)"
+    if age.days >= cfg.events.max_staleness_days:
+        r.warn("last good event data", label, "stale: F2 is rejecting every stock; refresh NSE or drop new CSV exports")
+    else:
+        r.row("last good event data", label, OK)
+
+
 def run_doctor(config_path: Optional[Path], out: TextIO, env_path: Optional[Path] = None) -> int:
     r = Report(out)
     out.write(f"Credit Spread System v{__version__} — doctor\n")
@@ -154,6 +182,7 @@ def run_doctor(config_path: Optional[Path], out: TextIO, env_path: Optional[Path
     _config_section(r, cfg, env)
     _secrets_section(r, env, env_path)
     _db_section(r, cfg)
+    _events_section(r, cfg)
 
     out.write("\n")
     for w in r.warnings:
