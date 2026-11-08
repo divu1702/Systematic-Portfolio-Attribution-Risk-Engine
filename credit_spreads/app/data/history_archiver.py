@@ -12,7 +12,8 @@ candles at `archive.interval` (1-minute by default), in two passes per contract:
 Two passes fit Kite's 60-day limit on 1-minute requests (one request each), and if the machine is
 off in expiry week only the last month of that series is lost (reported, not silent). Strikes that
 move into the band later are picked up with their full history. Each stock's daily bars (up to
-`archive.equity_days`) are saved and kept up to date, and its continuous futures saved once; a
+`archive.equity_days`) are saved and kept up to date, as are the market index's (`archive.index`, for
+beta), and each stock's continuous futures are saved once; a
 stock's own intraday history stays on Kite for years, so it is left for later.
 
 Storage: one compressed blob per contract-day with only the minutes that traded
@@ -132,6 +133,26 @@ def _spots(ctx, store, symbols: List[str], d: date) -> Dict[str, float]:
     return out
 
 
+def _index_token(ctx, store, name: str) -> Optional[int]:
+    """The index's instrument token from Kite's NSE list (INDICES segment), remembered in the store."""
+    key = f"index_token:{name}"
+    row = store.execute("SELECT value FROM meta WHERE key=?", (key,)).fetchone()
+    if row:
+        return int(row[0])
+    try:
+        rows = ctx.broker.instruments("NSE")
+    except Exception as exc:
+        log.warning("archive: could not list NSE instruments for the index: %s", exc)
+        return None
+    tok = next((r.get("instrument_token") for r in rows
+                if r.get("segment") == "INDICES" and r.get("tradingsymbol") == name), None)
+    if tok:
+        store.execute("INSERT OR REPLACE INTO meta VALUES (?,?)", (key, str(tok)))
+    else:
+        log.warning("archive: index %r not found in Kite's NSE instruments (archive.index)", name)
+    return int(tok) if tok else None
+
+
 def _day(r) -> date:
     return r["date"].date() if hasattr(r["date"], "date") else r["date"]
 
@@ -242,6 +263,18 @@ def run_archive(ctx, budget: Optional[int] = None, progress: Optional[Callable[[
                 (sym, str(_day(r)), r["open"], r["high"], r["low"], r["close"], int(r.get("volume") or 0))
                 for r in rows])
             rep.equities += 1
+        # Market index bars (for beta), kept up to date like the stock bars.
+        tok = _index_token(ctx, store, ac.index)
+        last = store.execute("SELECT MAX(date) FROM index_bars WHERE symbol=?", (ac.index,)).fetchone()[0]
+        start = (date.fromisoformat(last) + timedelta(days=1)) if last else upto - timedelta(days=ac.equity_days - 1)
+        if tok and start <= upto:
+            try:
+                rows = fetch(tok, start, "day")
+            except _Skip:
+                rows = []
+            if rows:
+                store.executemany("INSERT OR REPLACE INTO index_bars VALUES (?,?,?,?,?,?)", [
+                    (ac.index, str(_day(r)), r["open"], r["high"], r["low"], r["close"]) for r in rows])
         # 2. Continuous futures (daily; Kite keeps them), once per stock.
         done_cont = {k for (k,) in store.execute("SELECT key FROM archive_log WHERE kind='future_cont'")}
         near_fut: Dict[str, Instrument] = {}
@@ -341,6 +374,7 @@ def archive_status(ctx) -> str:
         fb = store.execute("SELECT COUNT(*), COALESCE(SUM(n),0), COALESCE(SUM(LENGTH(data)),0) FROM future_bars").fetchone()
         oc = store.execute("SELECT COUNT(*), COUNT(DISTINCT symbol), MIN(date), MAX(date) FROM option_candles").fetchone()
         n_bar = store.execute("SELECT COUNT(*), COUNT(DISTINCT symbol), MAX(date) FROM bars").fetchone()
+        n_idx = store.execute("SELECT symbol, COUNT(*), MIN(date), MAX(date) FROM index_bars GROUP BY symbol").fetchall()
         prog = store.execute("SELECT kind, final, COUNT(*) FROM archive_progress GROUP BY kind, final").fetchall()
         qs = store.execute("SELECT COUNT(*), COALESCE(SUM(n),0), COALESCE(SUM(LENGTH(data)),0) FROM quote_snaps").fetchone()
         staged = store.execute("SELECT COUNT(*) FROM quote_snap_rows").fetchone()[0]
@@ -352,6 +386,7 @@ def archive_status(ctx) -> str:
              f"intraday futures candles: {fb[1]:,} in {fb[0]:,} contract-days, {fb[2] / 1e6:.1f} MB",
              f"daily option candles: {oc[0]:,} for {oc[1]} stocks ({oc[2]} to {oc[3]})",
              f"stock bars: {n_bar[0]:,} for {n_bar[1]} stocks (latest {n_bar[2]})",
+             "index bars: " + (", ".join(f"{s} {n:,} ({a} to {b})" for s, n, a, b in n_idx) or "none yet"),
              "contracts: " + (", ".join(f"{k} {names.get(f, f)} {n:,}" for k, f, n in prog) or "none yet"),
              f"quote snapshots: {qs[1]:,} quotes in {qs[0]:,} contract-days, {qs[2] / 1e6:.1f} MB"
              + (f" (+{staged:,} from today, compacted after the close)" if staged else ""),

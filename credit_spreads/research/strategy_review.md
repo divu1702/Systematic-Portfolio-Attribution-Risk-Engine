@@ -171,6 +171,9 @@ close are now left out (about 2% of rows had been settled at the last close inst
 
 ## 5. How to test it without fooling ourselves
 
+Superseded by [research_plan.md](research_plan.md), which adds the direction, beta, richness-ranking
+and retail-demand hypotheses and fixes the decision rules before any Indian data is collected.
+
 Write the hypotheses down first, then test each once on data we have not looked at:
 
 - H1 IV percentile >= 70 improves results. H2 dropping the fresh-shock requirement improves results.

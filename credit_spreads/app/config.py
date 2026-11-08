@@ -311,6 +311,7 @@ class ArchiveCfg(_Section):
     days_before_expiry: PosInt = 3                          # final fetch in a series' last N trading days
     max_requests_per_run: PosInt = 12000                    # ~67 minutes at Kite's 3 requests a second
     equity_days: Annotated[int, Field(ge=30, le=2000)] = 2000
+    index: str = "NIFTY 50"                                 # market index (NSE INDICES segment) for beta
 
 
 class SnapshotCfg(_Section):

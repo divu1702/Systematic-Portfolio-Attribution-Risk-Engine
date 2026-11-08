@@ -45,6 +45,9 @@ class Quote:
     asks: Tuple[Level, ...]     # best first
     volume: int
     oi: int
+    buy_total: int = 0          # all pending buy orders' quantity (Kite buy_quantity), beyond 5 levels
+    sell_total: int = 0         # all pending sell orders' quantity (Kite sell_quantity)
+    last_qty: int = 0           # size of the last trade
 
     @property
     def bid(self) -> float:
@@ -85,6 +88,9 @@ def parse_quote(key: str, raw: dict) -> Quote:
         asks=side(depth.get("sell")),
         volume=int(raw.get("volume") or raw.get("volume_traded") or 0),
         oi=int(raw.get("oi") or 0),
+        buy_total=int(raw.get("buy_quantity") or 0),
+        sell_total=int(raw.get("sell_quantity") or 0),
+        last_qty=int(raw.get("last_quantity") or 0),
     )
 
 

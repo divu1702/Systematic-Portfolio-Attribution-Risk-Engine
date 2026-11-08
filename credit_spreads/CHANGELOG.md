@@ -33,6 +33,13 @@ setting away.
   futures and stocks; compacted after the close. Failures never disturb trading.
 - The study prices each option at its trade nearest 15:00 against the futures at the same minute,
   and drops option-days with no trade near 15:00.
+- Quote snapshots also save all pending buy and sell quantity and the last trade's size (order-book
+  imbalance, for the retail-demand hypotheses). The archiver keeps NIFTY 50 daily bars
+  (`archive.index`) for beta.
+- First Indian study (`research/india_stock_study.py`), stock prices only: strike hit rates by trend,
+  momentum, reversal, shocks, market regime and beta; volatility-forecast accuracy (HV20, HV60, EWMA,
+  Yang-Zhang, HAR); put-strike clustering on bad market days; the level test. Hypotheses and decision
+  rules fixed beforehand in `research/research_plan.md`.
 - The research study runs on Indian data (`research/option_selling_study.py --market nse`): IV and delta
   from daily option closes against the same expiry's futures (vectorised Black-76), bid/ask from recorded
   quotes or from spreads learnt from them, results dates as first seen, and windows across bonus, split,

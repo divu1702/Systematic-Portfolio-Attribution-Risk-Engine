@@ -137,6 +137,20 @@ into compressed blobs after the close: roughly 12 MB a day for ~200 stocks, abou
 needs to test exits at the 5-minute marks they run on live. A failing snapshot never disturbs
 trading: it is logged, and alerted at most once a day.
 
+### First Indian study (stock prices only, ready for the first night)
+
+```bash
+python research/india_stock_study.py > research/results_india_stocks.md
+```
+
+Uses only the daily bars the archiver saves on its first run (about 5 years for every F&O stock and
+the NIFTY 50). For every stock, every week, it asks what a 0.25-delta put and call would have faced
+over the next 15 trading days: how often each strike was hit or touched by trend, momentum,
+short-term reversal, recent shocks, market regime and beta; which volatility forecast is most
+accurate; how put strikes cluster on bad market days; and whether our support/resistance levels
+carry information. The hypotheses it tests, and what each result would change, are fixed in
+`research/research_plan.md`.
+
 ### Research study on Indian data
 
 `research/option_selling_study.py` measures where selling stock options pays (implied vs later

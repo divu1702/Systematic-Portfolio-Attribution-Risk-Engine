@@ -122,6 +122,7 @@ archive:                     # + save Kite option history before it disappears (
   days_before_expiry: 3      # ... and again in its series' last 3 trading days
   max_requests_per_run: 12000  # ~67 minutes at most at 3 requests a second; the rest continues next run
   equity_days: 2000
+  index: "NIFTY 50"          # market index saved alongside, for each stock's beta
 snapshots:                   # + intraday bid/ask for the strikes the strategy trades (needs the Kite session)
   every_min: 15              # 0 = off. 09:32, 09:47, ... (offset from the 5-minute monitor)
   offset_min: 2

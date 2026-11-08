@@ -78,6 +78,10 @@ CREATE TABLE IF NOT EXISTS future_bars (          -- archiver: intraday futures 
     interval TEXT NOT NULL, n INTEGER NOT NULL, data BLOB NOT NULL,
     PRIMARY KEY (symbol, expiration, date)
 );
+CREATE TABLE IF NOT EXISTS index_bars (           -- archiver: daily bars of the market index (beta)
+    symbol TEXT NOT NULL, date TEXT NOT NULL, open REAL, high REAL, low REAL, close REAL,
+    PRIMARY KEY (symbol, date)
+);
 CREATE TABLE IF NOT EXISTS archive_progress (     -- archiver: how far each contract's history is saved
     tradingsymbol TEXT PRIMARY KEY, kind TEXT NOT NULL, symbol TEXT NOT NULL, expiration TEXT NOT NULL,
     last_date TEXT, requests INTEGER NOT NULL DEFAULT 0, final INTEGER NOT NULL DEFAULT 0
@@ -85,7 +89,7 @@ CREATE TABLE IF NOT EXISTS archive_progress (     -- archiver: how far each cont
 CREATE TABLE IF NOT EXISTS quote_snap_rows (      -- recorder: today's intraday quote snapshots, before compaction
     ts TEXT NOT NULL, symbol TEXT NOT NULL, expiration TEXT NOT NULL, strike REAL NOT NULL, cp TEXT NOT NULL,
     bid REAL, ask REAL, last REAL, bid_qty INTEGER, ask_qty INTEGER, bid_depth INTEGER, ask_depth INTEGER,
-    volume INTEGER, oi INTEGER,
+    volume INTEGER, oi INTEGER, buy_total INTEGER, sell_total INTEGER, last_qty INTEGER,
     PRIMARY KEY (ts, symbol, expiration, strike, cp)
 );
 CREATE TABLE IF NOT EXISTS quote_snaps (          -- recorder: intraday quote snapshots, one blob per contract-day

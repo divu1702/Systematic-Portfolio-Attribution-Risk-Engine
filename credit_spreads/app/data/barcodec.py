@@ -26,7 +26,8 @@ CANDLE_COLS: Tuple[Tuple[str, str, bool], ...] = (
 QUOTE_COLS: Tuple[Tuple[str, str, bool], ...] = (
     ("minute", "time", True), ("bid", "price", True), ("ask", "price", True), ("last", "price", True),
     ("bid_qty", "int", False), ("ask_qty", "int", False), ("bid_depth", "int", False),
-    ("ask_depth", "int", False), ("volume", "int", True), ("oi", "int", True))
+    ("ask_depth", "int", False), ("volume", "int", True), ("oi", "int", True),
+    ("buy_total", "int", False), ("sell_total", "int", False), ("last_qty", "int", False))
 _SCHEMAS = {b"C": CANDLE_COLS, b"Q": QUOTE_COLS}
 
 

@@ -15,7 +15,7 @@ NOV, DEC = date(2026, 11, 24), date(2026, 12, 29)
 
 
 def _archive_cfg(ctx, **kw):
-    base = {"band": 0.04, "max_expiries": 2, "equity_days": 120}
+    base = {"band": 0.04, "max_expiries": 2, "equity_days": 120, "index": "SYNTHETIC INDEX"}
     ctx.cfg = ctx.cfg.model_copy(update={"archive": ctx.cfg.archive.model_copy(update={**base, **kw})})
     return ctx
 
@@ -49,7 +49,8 @@ def test_codec_round_trip_and_size():
     assert len(blob) / len(rows) < 15                                 # vs ~100 bytes as SQLite rows
     q = barcodec.encode({"minute": [570, 585], "bid": [10.05, 10.1], "ask": [10.4, 10.35], "last": [10.2, 10.25],
                          "bid_qty": [650, 1300], "ask_qty": [650, 650], "bid_depth": [3250, 3900],
-                         "ask_depth": [2600, 2600], "volume": [6500, 9100], "oi": [10**6, 10**6 + 650]}, b"Q")
+                         "ask_depth": [2600, 2600], "volume": [6500, 9100], "oi": [10**6, 10**6 + 650],
+                         "buy_total": [52000, 61100], "sell_total": [39000, 45500], "last_qty": [650, 1300]}, b"Q")
     assert np.allclose(barcodec.decode(q)["ask"], [10.4, 10.35])
     assert barcodec.at_minute(back, 15 * 60, 30) >= 0 and barcodec.at_minute({"minute": np.array([600])}, 900, 30) == -1
 
@@ -90,8 +91,12 @@ def test_first_pass_minute_candles_budget_and_resume(archive_ctx):
     n_cont = db.execute("SELECT COUNT(*) FROM future_candles WHERE expiration='continuous'").fetchone()[0]
     n_bars = db.execute("SELECT COUNT(DISTINCT symbol), MAX(date) FROM bars").fetchone()
     db.close()
+    db = _db(ctx)
+    n_idx = db.execute("SELECT COUNT(*), MAX(date) FROM index_bars WHERE symbol='SYNTHETIC INDEX'").fetchone()
+    db.close()
     assert n_fut_bars > 0 and n_cont > 0 and n_bars == (8, "2026-11-05")
-    assert "intraday option candles" in archive_status(ctx)
+    assert n_idx[0] > 60 and n_idx[1] == "2026-11-05"                 # the market index, for beta
+    assert "intraday option candles" in archive_status(ctx) and "SYNTHETIC INDEX" in archive_status(ctx)
 
 
 def test_thin_strikes_store_fewer_minutes(archive_ctx):
@@ -236,6 +241,7 @@ def test_quote_snapshots_are_staged_then_compacted(mock_ctx):
     q = barcodec.decode(blob)
     assert left == 0 and total == n_keys and list(q["minute"]) == [9 * 60 + 32, 9 * 60 + 47]
     assert ((q["ask"] >= q["bid"]) & (q["ask"] > 0)).all()
+    assert (q["buy_total"] >= q["bid_depth"]).all() and (q["sell_total"] > 0).all() and (q["last_qty"] > 0).all()
     ctx.is_mock = False
     try:
         _snap_at(ctx, 10, 2)

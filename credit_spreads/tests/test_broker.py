@@ -55,7 +55,9 @@ def test_parse_quote_drops_empty_levels():
     assert (q.bid, q.ask, q.mid) == (9.9, 10.1, 10.0)
     assert len(q.bids) == 1 and q.spread_pct == pytest.approx(0.02)
     empty = parse_quote("NFO:Y", {"last_price": 5, "depth": {"buy": [], "sell": []}})
-    assert empty.bid == 0 and empty.mid is None
+    assert empty.bid == 0 and empty.mid is None and empty.buy_total == 0
+    full = parse_quote("NFO:Z", {"last_price": 5, "buy_quantity": 12000, "sell_quantity": 8000, "last_quantity": 650})
+    assert (full.buy_total, full.sell_total, full.last_qty) == (12000, 8000, 650)     # Kite full-quote fields
 
 
 # ----------------------------------------------------------------------------- KiteBroker

@@ -125,7 +125,8 @@ def record_eod(ctx) -> None:
 # ----------------------------------------------------------------------------- intraday quote snapshots
 
 def snapshot_quotes(ctx) -> int:
-    """Bid/ask, sizes, volume and OI through the day for the strikes the strategy trades: options of
+    """Bid/ask, sizes, volume, OI, all pending buy and sell quantity (order-book imbalance, a gauge of
+    who is pressing) and the last trade's size, through the day, for the strikes the strategy trades: options of
     each stock's nearest `snapshots.expiries` monthly series within +-`snapshots.band` of the futures
     price, plus those futures and the stock. Two quote requests for stocks and futures, then about
     one per 500 options (Kite: one request a second). Rows are staged and compacted after the close
@@ -170,10 +171,11 @@ def snapshot_quotes(ctx) -> int:
                     else 0.0, typ, q.bid or None, q.ask or None, q.last or None,
                     q.bids[0].quantity if q.bids else 0, q.asks[0].quantity if q.asks else 0,
                     sum(lv.quantity for lv in q.bids[:5]), sum(lv.quantity for lv in q.asks[:5]),
-                    int(q.volume or 0), int(q.oi or 0)))
+                    int(q.volume or 0), int(q.oi or 0), int(q.buy_total or 0), int(q.sell_total or 0),
+                    int(q.last_qty or 0)))
     store = connect(ctx.cfg.resolve(ctx.cfg.paths.market_store))
     try:
-        store.executemany("INSERT OR REPLACE INTO quote_snap_rows VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)", out)
+        store.executemany("INSERT OR REPLACE INTO quote_snap_rows VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", out)
         store.commit()
     finally:
         store.close()
@@ -189,7 +191,7 @@ def compact_snapshots(ctx) -> int:
     store = connect(ctx.cfg.resolve(ctx.cfg.paths.market_store))
     try:
         rows = store.execute("SELECT ts, symbol, expiration, strike, cp, bid, ask, last, bid_qty, ask_qty, "
-                             "bid_depth, ask_depth, volume, oi FROM quote_snap_rows "
+                             "bid_depth, ask_depth, volume, oi, buy_total, sell_total, last_qty FROM quote_snap_rows "
                              "ORDER BY symbol, expiration, strike, cp, ts").fetchall()
         groups: Dict[tuple, list] = {}
         for r in rows:
@@ -200,7 +202,9 @@ def compact_snapshots(ctx) -> int:
                     "bid": [r[5] or 0.0 for r in rs], "ask": [r[6] or 0.0 for r in rs], "last": [r[7] or 0.0 for r in rs],
                     "bid_qty": [r[8] or 0 for r in rs], "ask_qty": [r[9] or 0 for r in rs],
                     "bid_depth": [r[10] or 0 for r in rs], "ask_depth": [r[11] or 0 for r in rs],
-                    "volume": [r[12] or 0 for r in rs], "oi": [r[13] or 0 for r in rs]}
+                    "volume": [r[12] or 0 for r in rs], "oi": [r[13] or 0 for r in rs],
+                    "buy_total": [r[14] or 0 for r in rs], "sell_total": [r[15] or 0 for r in rs],
+                    "last_qty": [r[16] or 0 for r in rs]}
             old = store.execute("SELECT data FROM quote_snaps WHERE symbol=? AND expiration=? AND strike=? AND cp=? "
                                 "AND date=?", (sym, exp, k, cp, d)).fetchone()
             if old:
