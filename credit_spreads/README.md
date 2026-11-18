@@ -180,8 +180,9 @@ These could not be verified offline (the build machine has no access to Zerodha 
 2. `python -m app scan --why`: check `logs/app.log` for NSE warnings. The system asks NSE for events,
    sectors and holidays with an honest client identity and does not try to get past NSE's bot check.
    If NSE refuses, F2 fails closed (no trades). Then download the Board Meetings and Corporate
-   Actions CSVs from nseindia.com in your browser and drop them into `imports/events/` (weekly is
-   enough: each file counts as fresh for 2 days after you save it), or use a licensed data feed.
+   Actions CSVs from nseindia.com in your browser and drop them into `imports/events/` every day or
+   two: each file counts as fresh for `events.max_staleness_days` (2) days after you save it, and after
+   that F2 blocks every entry. Or use a licensed data feed.
 3. Expect no trades for the first few weeks. F5 needs IV snapshots from earlier days (fails closed
    until then), and F4 uses the HV-percentile proxy until 120 trading days of IV history exist.
 4. `python -m app record <SYMBOL> <SYMBOL>` saves real responses under `fixtures/` for offline tests.
