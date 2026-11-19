@@ -426,8 +426,10 @@ class PaperBroker:
                 qty = legs[0][3]
                 ts = datetime.combine(d, time(15, 30))
                 pnl = t.credit * qty + net - t.entry_charges - charges.total
-                self._order(s, t.account, t.id, "settlement",
-                            [{"symbol": t.symbol, "spot": S, "net_intrinsic": round(net, 2)}], True, "", ts)
+                legs_out = [{"symbol": lg["tradingsymbol"], "side": lg["side"], "qty": lg["qty"], "spot": S,
+                             "intrinsic": round(max(S - lg["strike"], 0.0) if lg["cp"] == "CE" else
+                                                max(lg["strike"] - S, 0.0), 4)} for lg in json.loads(t.legs_json)]
+                self._order(s, t.account, t.id, "settlement", legs_out, True, "", ts)
                 self._post(s, t.account, ts, "settlement", net, t.id, f"expiry settlement at {S:g}")
                 if charges.total:
                     self._post(s, t.account, ts, "charges", -charges.total, t.id,

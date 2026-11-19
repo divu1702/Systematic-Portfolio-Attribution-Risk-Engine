@@ -182,11 +182,11 @@ def test_order_cost_sell_leg_hand_computed():
     oc = order_cost(c, "SELL", 21, 1350)          # turnover 28,350
     assert oc.brokerage == 20
     assert oc.stt == pytest.approx(42.525)
-    assert oc.exchange == pytest.approx(28_350 * 0.0003503)
+    assert oc.exchange == pytest.approx(28_350 * 0.0003553)
     assert oc.sebi == pytest.approx(0.02835)
     assert oc.stamp == 0
-    assert oc.gst == pytest.approx(0.18 * (20 + 28_350 * 0.0003503 + 0.02835))
-    assert oc.total == pytest.approx(77.877, abs=1e-3)
+    assert oc.gst == pytest.approx(0.18 * (20 + 28_350 * 0.0003553 + 0.02835))
+    assert oc.total == pytest.approx(78.044, abs=1e-3)
 
 
 def test_buy_leg_has_stamp_not_stt():

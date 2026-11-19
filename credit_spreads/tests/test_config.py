@@ -23,7 +23,7 @@ def test_shipped_config_loads_with_spec_defaults():
 
 def test_exchange_txn_charge_is_set():
     cfg = load_config()
-    assert cfg.costs.exchange_txn_pct == 0.0003503
+    assert cfg.costs.exchange_txn_pct == 0.0003553
     assert cfg.costs.missing == []
 
 

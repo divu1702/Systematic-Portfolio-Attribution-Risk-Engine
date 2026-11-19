@@ -117,7 +117,7 @@ costs:                 # update when broker or exchange rates change
   per_contract: 0           # + only used by the per_contract model
   brokerage_per_order: 20
   stt_sell_premium: 0.0015
-  exchange_txn_pct: 0.0003503  # NSE 0.03503% of premium (zerodha.com/charges, Nov 2026)
+  exchange_txn_pct: 0.0003553  # NSE 0.03553% of premium, each side (owner, 19 Nov 2026; same as platform.yaml)
   sebi_fee_per_crore: 10
   stamp_buy_pct: 0.00003
   gst: 0.18

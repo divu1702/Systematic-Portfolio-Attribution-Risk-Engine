@@ -293,8 +293,8 @@ class CostsCfg(_Section):
     per_contract: NonNegFloat = 0.0
     brokerage_per_order: NonNegFloat = 20
     stt_sell_premium: NonNegFloat = 0.0015
-    # NSE options transaction charge on premium (Zerodha charges page, Nov 2026: 0.03503%).
-    exchange_txn_pct: Optional[NonNegFloat] = 0.0003503
+    # NSE options transaction charge on premium, each side: 0.03553% (owner-approved 19 Nov 2026, same as the platform).
+    exchange_txn_pct: Optional[NonNegFloat] = 0.0003553
     sebi_fee_per_crore: NonNegFloat = 10
     stamp_buy_pct: NonNegFloat = 0.00003
     gst: NonNegFloat = 0.18
