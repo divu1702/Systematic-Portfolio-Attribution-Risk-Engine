@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% block body %}
+{% for a in accounts %}
+<div class="card">
+  <h2><a href="/positions?account={{ a.account }}" style="color:inherit;text-decoration:none">{{ a.account }}</a>
+    <span class="chip">{{ labels[a.account] }}</span></h2>
+  {% if not a.started %}
+  <p class="mute small">Starts with {{ capital|inr }} on go_live_date ({{ go_live or "not set" }}).</p>
+  {% else %}
+  <div class="grid">
+    <div><div class="k">Account value</div><div class="v">{{ a.value|inr }}</div></div>
+    <div><div class="k">Today</div><div class="v {{ a.today_pnl|sign }}">{{ a.today_pnl|inr }}</div></div>
+    <div><div class="k">Total P&amp;L</div><div class="v {{ a.total_pnl|sign }}">{{ a.total_pnl|inr }}</div></div>
+    <div><div class="k">P&amp;L in R (closed · open)</div><div class="v {{ a.pnl_r|sign }}">{{ "%+.2f"|format(a.pnl_r) }}R · {{ "%+.2f"|format(a.open_r) }}R</div></div>
+    <div><div class="k">Margin used</div><div class="v">{{ a.used_margin|inr }}</div></div>
+    <div><div class="k">Available</div><div class="v">{{ a.available|inr }}</div></div>
+    <div><div class="k">Open positions</div><div class="v">{{ a.open_positions }}</div></div>
+    <div><div class="k">Win rate</div><div class="v">{% if a.win_rate is none %}–{% else %}{{ "%.0f"|format(a.win_rate * 100) }}% of {{ a.closed_trades }}{% endif %}</div></div>
+  </div>
+  {{ spark(a.equity_curve)|safe }}
+  {% endif %}
+</div>
+{% endfor %}
+{% endblock %}

@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% block body %}
+<div class="card">
+  <h2>ROI scanner</h2>
+  <div class="small mute">{{ source }}</div>
+  <form method="get" action="/scanner" class="row2" style="margin-top:8px">
+    <select name="sector" onchange="this.form.submit()"><option value="">All sectors</option>
+      {% for s in sectors %}<option {{ 'selected' if s == sector else '' }}>{{ s }}</option>{% endfor %}</select>
+    <select name="setup" onchange="this.form.submit()"><option value="">Any setup status</option>
+      {% for s in ["1", "2", "3", "4", "any"] %}<option value="{{ s }}" {{ 'selected' if s == setup else '' }}>{{ 'With any setup' if s == 'any' else 'Setup ' + s }}</option>{% endfor %}</select>
+  </form>
+  <form method="post" action="/scanner/refresh" style="margin-top:8px"><button class="ghost" {{ 'disabled' if running else '' }}>
+    {{ 'Refreshing…' if running else 'Refresh now (live quotes, basket margins)' }}</button></form>
+</div>
+<div class="card">
+  <h2>Setups today</h2>
+  {% for s in setups %}
+  <div class="small" style="padding:4px 0;border-bottom:1px solid var(--line)">
+    <strong>{{ s.symbol }}</strong> Setup {{ s.setup }} {{ s.direction.replace('_', ' ') }} @ {{ "%.2f"|format(s.level) }}
+    <span class="chip">{{ s.state }}</span>{% if s.route %}<span class="chip">route {{ s.route }}</span>{% endif %}
+    <span class="mute">Day 0 {{ s.day0 }}</span>{% if s.strict_trade_id %}<span class="chip">strict</span>{% endif %}{% if s.research_trade_id %}<span class="chip">research</span>{% endif %}
+  </div>
+  {% else %}<p class="mute">No armed, confirming or confirmed setups.</p>{% endfor %}
+</div>
+<div class="card">
+  <h2>Ranking ({{ rows|length }})</h2>
+  <div class="scroll"><table>
+    <tr><th>#</th><th>Stock</th><th>Call RoM</th><th>Put RoM</th><th>Setup</th></tr>
+    {% for r in rows %}
+    <tr><td>{{ r.rank }}</td><td><a href="/ticket?symbol={{ r.symbol }}">{{ r.symbol }}</a><div class="small mute">{{ r.sector or '' }}</div></td>
+      <td>{{ r.rom_call|pct }}</td><td>{{ r.rom_put|pct }}</td><td class="small">{% for s in r.setups %}<span class="chip">{{ s }}</span>{% endfor %}</td></tr>
+    {% else %}<tr><td colspan="5" class="mute">No ranking yet today (the screener runs at 15:20).</td></tr>{% endfor %}
+  </table></div>
+</div>
+{% endblock %}

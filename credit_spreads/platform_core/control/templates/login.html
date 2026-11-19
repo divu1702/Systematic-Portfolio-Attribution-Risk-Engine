@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block body %}
+<div class="card">
+  <h2>Enter PIN</h2>
+  {% if not pin_set %}
+  <p>No PIN is set yet. On the laptop run <code>python -m platform_core set-pin</code>, then restart the platform.</p>
+  {% elif locked %}
+  <p class="warn">Too many wrong PINs. Try again in {{ locked }} minute(s).</p>
+  {% else %}
+  <form method="post" action="/login">
+    <input name="pin" type="password" inputmode="numeric" autocomplete="current-password" pattern="[0-9]*" autofocus required>
+    <div style="height:10px"></div>
+    <button type="submit">Unlock</button>
+  </form>
+  {% endif %}
+</div>
+{% endblock %}

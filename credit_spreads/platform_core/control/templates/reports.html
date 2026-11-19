@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block body %}
+<div class="card">
+  <h2>Daily screener reports</h2>
+  {% for f in daily %}<div><a href="/reports/file/{{ f }}">{{ f.split('/')[-1] }}</a></div>{% else %}<p class="mute">None yet.</p>{% endfor %}
+</div>
+<div class="card">
+  <h2>Monthly comparison</h2>
+  {% for f in monthly %}<div><a href="/reports/file/{{ f }}">{{ f.split('/')[-1] }}</a></div>{% else %}<p class="mute">Generated after the last session of each month.</p>{% endfor %}
+</div>
+<div class="card">
+  <h2>Recent runs</h2>
+  <div class="scroll"><table>
+    <tr><th>Run</th><th>Entries</th><th>Exits</th><th>Armed</th><th>Notes</th></tr>
+    {% for r in runs %}
+    <tr><td class="small">{{ r.ts }}<div class="mute">{{ r.phase }}</div></td><td>{{ r.entries|length }}</td><td>{{ r.exits|length }}</td>
+      <td>{{ r.armed|length }}</td><td class="small">{{ (r.warnings + (r.mismatches|map(attribute='note')|list))|join('; ') }}</td></tr>
+    {% else %}<tr><td colspan="5" class="mute">No runs recorded yet.</td></tr>{% endfor %}
+  </table></div>
+</div>
+<div class="card">
+  <h2>Strategy log: latest setups</h2>
+  <div class="scroll"><table>
+    <tr><th>Stock</th><th>Setup</th><th>State</th><th>Level</th><th>Notes</th></tr>
+    {% for s in setups %}
+    <tr><td>{{ s.symbol }}<div class="small mute">Day 0 {{ s.day0_date }}</div></td><td>S{{ s.setup }} {{ s.direction.replace('_', ' ') }}</td>
+      <td>{{ s.state }}{% if s.route %} ({{ s.route }}){% endif %}</td><td>{{ "%.2f"|format(s.level) }}</td><td class="small">{{ s.note or '' }}</td></tr>
+    {% else %}<tr><td colspan="5" class="mute">No setups yet.</td></tr>{% endfor %}
+  </table></div>
+</div>
+<div class="card">
+  <h2>Official close checks</h2>
+  <div class="scroll"><table>
+    <tr><th>Date</th><th>Stock</th><th>Check</th><th>Result</th></tr>
+    {% for c in checks %}
+    <tr><td class="small">{{ c.date }}</td><td>{{ c.symbol }}</td><td>{{ c.kind }}</td>
+      <td class="small {{ 'neg' if c.mismatch else '' }}">{{ 'close_mismatch: ' if c.mismatch else '' }}{{ c.note }}</td></tr>
+    {% else %}<tr><td colspan="4" class="mute">None yet.</td></tr>{% endfor %}
+  </table></div>
+</div>
+{% endblock %}

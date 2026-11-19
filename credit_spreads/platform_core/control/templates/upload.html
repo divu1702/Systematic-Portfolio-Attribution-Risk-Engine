@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block body %}
+<div class="card">
+  <h2>Upload a file</h2>
+  <p class="small">Events: the NSE board-meetings or corporate-actions CSV export. A stale events file (older than
+    {{ max_age }} day(s)) triggers the 08:45 reminder; data older than {{ staleness }} days removes every stock from the screener.
+    {% if events_age is not none %}<br>Newest events file: {{ "%.1f"|format(events_age) }} day(s) old.{% else %}<br>No events file uploaded yet.{% endif %}</p>
+  <form method="post" action="/upload" enctype="multipart/form-data">
+    <label>Kind</label>
+    <select name="kind">
+      <option value="events">Events (CSV)</option>
+      <option value="sectors">Sectors (sectors.csv: symbol, sector)</option>
+      <option value="bhavcopy">NSE bhavcopy (zip or CSV)</option>
+    </select>
+    <label>File</label>
+    <input type="file" name="file" required>
+    <div style="height:10px"></div>
+    <button type="submit">Upload</button>
+  </form>
+</div>
+<div class="card">
+  <h2>Recent uploads</h2>
+  <table><tr><th>Time</th><th>Kind</th><th>File</th><th>Rows</th></tr>
+    {% for u in uploads %}<tr><td class="small">{{ u.ts }}</td><td>{{ u.kind }}</td><td class="small">{{ u.filename }}</td><td>{{ u.rows if u.rows is not none else '–' }}</td></tr>
+    {% else %}<tr><td colspan="4" class="mute">None yet.</td></tr>{% endfor %}
+  </table>
+</div>
+{% endblock %}

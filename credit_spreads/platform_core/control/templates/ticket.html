@@ -1,0 +1,97 @@
+{% extends "base.html" %}
+{% block body %}
+<div class="card">
+  <h2>Order ticket · discretionary</h2>
+  {% if not started %}<p class="warn small">The discretionary account starts on go_live_date ({{ go_live or "not set" }}); orders are rejected until then.</p>{% endif %}
+  <form id="ticket" method="post" action="/ticket/place" onsubmit="return confirmPlace()">
+    <label>Stock</label>
+    <input name="symbol" id="symbol" list="stocks" value="{{ symbol or '' }}" autocapitalize="characters" required>
+    <datalist id="stocks">{% for s in stocks %}<option value="{{ s }}">{% endfor %}</datalist>
+    <div class="row2">
+      <div><label>Expiry</label><select name="expiry" id="expiry"></select></div>
+      <div><label>Direction</label>
+        <select name="direction" id="direction"><option value="bull_put">Bull put</option><option value="bear_call">Bear call</option></select></div>
+    </div>
+    <div class="row2">
+      <div><label>Sell strike</label><select name="short" id="short"></select></div>
+      <div><label>Buy strike</label><select name="long" id="long"></select></div>
+    </div>
+    <div class="row2">
+      <div><label>Lots</label><input name="lots" id="lots" type="number" min="1" value="1" inputmode="numeric"></div>
+      <div><label>Stop level (price)</label><input name="stop" id="stop" type="number" step="0.05" inputmode="decimal" placeholder="blank: 1R = max loss"></div>
+    </div>
+    <div class="row2">
+      <div><label>Setup tag</label><select name="tag" id="tag">{% for t in tags %}<option value="{{ t }}" {{ 'selected' if t == 'none' else '' }}>{{ t }}</option>{% endfor %}</select></div>
+      <div><label>&nbsp;</label><button type="button" class="ghost" onclick="preview()">Preview</button></div>
+    </div>
+    <label>Reason (one line)</label>
+    <input name="reason" id="reason" maxlength="300">
+    <div id="pv" class="card" style="margin-top:12px;display:none"></div>
+    <button type="submit" id="place" disabled>Place order at natural prices</button>
+  </form>
+</div>
+<div class="card">
+  <h2>Open discretionary positions</h2>
+  {% for p in positions %}
+  <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--line)">
+    <div><strong>{{ p.symbol }}</strong> {{ p.direction.replace('_', ' ') }} {{ p.legs[0].strike }}/{{ p.legs[1].strike }} ×{{ p.lots }}
+      <div class="small {{ (p.pnl or 0)|sign }}">{% if p.pnl is none %}–{% else %}{{ p.pnl|inr }}{% endif %}{% if p.pnl_r is not none %} ({{ "%+.2f"|format(p.pnl_r) }}R){% endif %}</div></div>
+    <form method="post" action="/close/{{ p.id }}" onsubmit="return confirm('Close {{ p.symbol }}?')" style="width:110px"><button class="danger">Close</button></form>
+  </div>
+  {% else %}<p class="mute">None open.</p>{% endfor %}
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+const $ = (id) => document.getElementById(id);
+let chain = null, timer = null;
+const fmt = (x, d = 2) => (x === null || x === undefined) ? "–" : Number(x).toLocaleString("en-IN", {maximumFractionDigits: d, minimumFractionDigits: d});
+async function loadExpiries() {
+  const s = $("symbol").value.trim().toUpperCase(); if (!s) return;
+  const r = await fetch(`/api/expiries?symbol=${encodeURIComponent(s)}`); if (!r.ok) return;
+  const d = await r.json(); $("expiry").innerHTML = d.expiries.map((e, i) => `<option ${e === d.chosen ? "selected" : ""}>${e}</option>`).join("");
+  loadChain();
+}
+async function loadChain() {
+  const s = $("symbol").value.trim().toUpperCase(), e = $("expiry").value; if (!s || !e) return;
+  const r = await fetch(`/api/chain?symbol=${encodeURIComponent(s)}&expiry=${e}`); if (!r.ok) return;
+  chain = await r.json(); fillStrikes();
+}
+function fillStrikes() {
+  if (!chain) return;
+  const cp = $("direction").value === "bear_call" ? "CE" : "PE";
+  const rows = chain.rows.filter((x) => x[cp]);
+  const opt = (x) => `<option value="${x.strike}">${x.strike} · ${fmt(x[cp].bid)}/${fmt(x[cp].ask)} · OI ${Number(x[cp].oi).toLocaleString("en-IN")}</option>`;
+  $("short").innerHTML = rows.map(opt).join(""); $("long").innerHTML = rows.map(opt).join("");
+  const spot = chain.spot || 0, ks = rows.map((x) => x.strike);
+  const near = ks.reduce((a, b) => Math.abs(b - spot) < Math.abs(a - spot) ? b : a, ks[0]);
+  const i = ks.indexOf(near), bear = cp === "CE";
+  $("short").value = ks[Math.min(Math.max(i + (bear ? 2 : -2), 0), ks.length - 1)];
+  $("long").value = ks[Math.min(Math.max(i + (bear ? 4 : -4), 0), ks.length - 1)];
+  $("place").disabled = true; $("pv").style.display = "none";
+}
+async function preview() {
+  const body = new FormData($("ticket"));
+  const r = await fetch("/api/preview", {method: "POST", body}); const d = await r.json();
+  const box = $("pv"); box.style.display = "block";
+  if (!r.ok) { box.innerHTML = `<span class="neg">${d.detail}</span>`; $("place").disabled = true; return; }
+  box.innerHTML = `<div class="grid small">
+    <div>Sell ${d.short} ${d.cp}: <b>${fmt(d.short_leg.bid)}</b> / ${fmt(d.short_leg.ask)}</div>
+    <div>Buy ${d.long} ${d.cp}: ${fmt(d.long_leg.bid)} / <b>${fmt(d.long_leg.ask)}</b></div>
+    <div>Credit (natural) <b>${fmt(d.credit_natural)}</b></div><div>Expected fill ${fmt(d.credit_expected)} × ${d.qty}</div>
+    <div>Margin <b>₹${fmt(d.margin, 0)}</b></div><div>Return on margin <b>${d.rom === null ? "–" : (d.rom * 100).toFixed(1) + "%"}</b></div>
+    <div>Maximum loss ₹${fmt(d.max_loss, 0)}</div><div>1R ₹${fmt(d.one_r, 0)} (${d.one_r_basis})</div>
+    <div>Breakeven ${fmt(d.breakeven)}</div><div>Spot ${fmt(d.spot)} · ATR ${fmt(d.atr)}</div></div>
+    ${d.margin_note ? `<div class="warn small">${d.margin_note}</div>` : ""}
+    ${d.system_setups.length ? `<div class="small">System setups on ${d.symbol}: ${d.system_setups.map((s) => `S${s.setup} ${s.direction} ${s.state} @ ${fmt(s.level)}`).join("; ")}</div>` : ""}`;
+  $("place").disabled = false;
+  clearTimeout(timer); timer = setTimeout(preview, {{ preview_refresh * 1000 }});
+}
+function confirmPlace() { return confirm("Place this paper order at natural prices?"); }
+$("symbol").addEventListener("change", loadExpiries);
+$("expiry").addEventListener("change", loadChain);
+$("direction").addEventListener("change", fillStrikes);
+["short", "long", "lots", "stop"].forEach((id) => $(id).addEventListener("change", () => { $("place").disabled = true; }));
+if ($("symbol").value) loadExpiries();
+</script>
+{% endblock %}

@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block body %}
+<div class="card">
+  <h2>Discretionary journal ({{ trades|length }})</h2>
+  <p class="small mute">Edit the setup tag, reason and stop level. A new stop re-prices 1R with the values saved at entry.</p>
+</div>
+{% for t in trades %}
+<div class="card">
+  <div><strong>{{ t.symbol }}</strong> {{ t.direction.replace('_', ' ') }} {{ t.short }}/{{ t.long }} · {{ t.expiry }} · ×{{ t.lots }}
+    <span class="chip">{{ t.status }}</span>{% if t.exit_reason %}<span class="chip">{{ t.exit_reason }}</span>{% endif %}</div>
+  <div class="grid small" style="margin-top:6px">
+    <div>Entry {{ t.entry_ts }}</div><div>Credit {{ "%.2f"|format(t.credit) }}</div>
+    <div>Margin {{ (t.margin or 0)|inr }}</div><div>RoM {{ t.rom|pct }}</div>
+    <div>1R {{ (t.one_r or 0)|inr }}</div><div>Max loss {{ t.max_loss|inr }}</div>
+    {% if t.status == 'closed' %}
+    <div>P&amp;L <span class="{{ t.pnl_inr|sign }}">{{ t.pnl_inr|inr }}</span> ({{ "%+.2f"|format(t.pnl_r or 0) }}R)</div><div>Held {{ t.holding_days }} day(s)</div>
+    {% endif %}
+    <div>Spot at entry {{ t.ctx.get('entry', {}).get('spot') or '–' }}</div><div>ATR {{ "%.2f"|format(t.ctx.get('entry', {}).get('atr') or 0) }}</div>
+  </div>
+  {% if t.ctx.get('system_setups') %}<div class="small mute">System that day: {% for s in t.ctx.system_setups %}S{{ s.setup }} {{ s.direction }} {{ s.state }} @ {{ "%.2f"|format(s.level) }}; {% endfor %}</div>{% endif %}
+  <form method="post" action="/journal/{{ t.id }}" style="margin-top:6px">
+    <div class="row2">
+      <div><label>Setup tag</label><select name="tag">{% for g in tags %}<option {{ 'selected' if g == (t.setup_tag or 'none') else '' }}>{{ g }}</option>{% endfor %}</select></div>
+      <div><label>Stop level</label><input name="stop" type="number" step="0.05" value="{{ t.owner_stop if t.owner_stop is not none else '' }}" placeholder="blank: max loss"></div>
+    </div>
+    <label>Reason</label><input name="reason" maxlength="300" value="{{ t.reason or '' }}">
+    <div style="height:8px"></div><button class="ghost">Save</button>
+  </form>
+</div>
+{% else %}<div class="card mute">No discretionary trades yet.</div>{% endfor %}
+{% endblock %}

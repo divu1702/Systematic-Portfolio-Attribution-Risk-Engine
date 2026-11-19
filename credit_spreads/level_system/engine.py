@@ -441,6 +441,26 @@ class LevelEngine:
         self.finish(snap, rep)
         return rep
 
+    def scan_now(self) -> List[dict]:
+        """The control centre's on-demand refresh: screener steps 1-3 on live quotes plus a look for Day 0
+        events right now. Nothing is armed, entered or saved here; the 15:20 run does that."""
+        today, now = self.ds.today(), self.ds.now()
+        snap = Snapshot(self.ds, now, self.r)
+        stocks = self.ds.stocks()
+        rows = screener.filter_stocks(self, snap, stocks, snap.spots(stocks), today)
+        ranked = screener.rank(self, snap, rows)
+        status = self._setup_status(today)
+        out = []
+        for r in ranked:
+            tags = list(status.get(r.symbol, []))
+            try:
+                tags += [f"Day 0 now: S{a.setup} {a.direction}" for a in detect(r.bars, today, self.cfg)]
+            except Exception as exc:                     # a detector problem must not hide the ranking
+                log.warning("detect %s: %s", r.symbol, exc)
+            out.append({"rank": r.rank, "symbol": r.symbol, "rom_call": r.rom_call, "rom_put": r.rom_put,
+                        "sector": self.ds.sector_of(r.symbol), "setups": tags})
+        return out
+
     def _setup_status(self, today: date) -> Dict[str, List[str]]:
         out: Dict[str, List[str]] = {}
         for row in store.on_date(self.ds.pengine, today):

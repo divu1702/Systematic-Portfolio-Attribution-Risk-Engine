@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% block body %}
+<div class="card">
+  <form method="get" action="/positions">
+    <select name="account" onchange="this.form.submit()">
+      {% for acc in account_names %}<option value="{{ acc }}" {{ 'selected' if acc == account else '' }}>{{ acc }}</option>{% endfor %}
+    </select>
+  </form>
+  <div class="grid" style="margin-top:10px">
+    <div><div class="k">Cash balance</div><div class="v">{{ summary.cash_balance|inr }}</div></div>
+    <div><div class="k">Account value</div><div class="v">{{ summary.value|inr }}</div></div>
+    <div><div class="k">Margin used</div><div class="v">{{ summary.used_margin|inr }}</div></div>
+    <div><div class="k">Available margin</div><div class="v">{{ summary.available|inr }}</div></div>
+  </div>
+</div>
+<div class="card">
+  <h2>Positions ({{ positions|length }})</h2>
+  {% for p in positions %}
+  <div style="padding:8px 0;border-bottom:1px solid var(--line)">
+    <div><strong>{{ p.symbol }}</strong> {{ p.direction.replace('_', ' ') }} · {{ p.expiry }} · {{ p.lots }} × {{ p.lot_size }}
+      {% if p.book %}<span class="chip">{{ p.book }}</span>{% endif %}{% if p.setup_tag %}<span class="chip">setup {{ p.setup_tag }}</span>{% endif %}</div>
+    <div class="small mute">{% for lg in p.legs %}{{ lg.side }} {{ lg.tradingsymbol }} @ {{ "%.2f"|format(lg.fill) }}{% if not loop.last %} · {% endif %}{% endfor %}</div>
+    <div class="grid small" style="margin-top:4px">
+      <div>Credit <span class="v">{{ "%.2f"|format(p.credit) }}</span></div>
+      <div>Cost to close <span class="v">{% if p.cost_to_close is none %}–{% else %}{{ "%.2f"|format(p.cost_to_close) }}{% endif %}</span>{% if p.stale_mark %} <span class="mute">(last mark)</span>{% endif %}</div>
+      <div>P&amp;L <span class="v {{ (p.pnl or 0)|sign }}">{% if p.pnl is none %}–{% else %}{{ p.pnl|inr }}{% endif %}</span>{% if p.pnl_r is not none %} ({{ "%+.2f"|format(p.pnl_r) }}R){% endif %}</div>
+      <div>Margin <span class="v">{{ (p.margin or 0)|inr }}</span></div>
+      <div>Level/stop <span class="v">{{ p.level if p.level is not none else "–" }}</span></div>
+      <div>1R <span class="v">{{ (p.one_r or 0)|inr }}</span> · max loss {{ (p.max_loss or 0)|inr }}</div>
+    </div>
+    {% if account == "discretionary" %}
+    <form method="post" action="/close/{{ p.id }}" onsubmit="return confirm('Close {{ p.symbol }} at natural prices?')" style="margin-top:6px">
+      <button class="danger" type="submit">Close position</button>
+    </form>
+    {% endif %}
+  </div>
+  {% else %}<p class="mute">No open positions.</p>{% endfor %}
+</div>
+<div class="card">
+  <h2>Funds ledger</h2>
+  <div class="scroll"><table>
+    <tr><th>Time</th><th>Entry</th><th>Amount</th><th>Cash</th><th>Used</th><th>Available</th></tr>
+    {% for f in funds %}
+    <tr><td class="small">{{ f.ts.replace('T', ' ') }}</td><td>{{ f.type.replace('_', ' ') }}<div class="small mute">{{ f.note or '' }}</div></td>
+      <td class="{{ f.amount|sign }}">{{ f.amount|inr }}</td><td>{{ f.cash_balance|inr }}</td><td>{{ f.used_margin|inr }}</td><td>{{ f.available|inr }}</td></tr>
+    {% else %}<tr><td colspan="6" class="mute">No ledger entries yet.</td></tr>{% endfor %}
+  </table></div>
+</div>
+{% endblock %}
