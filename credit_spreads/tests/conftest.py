@@ -100,3 +100,41 @@ def relaxed_ctx(cfg, tmp_path, when=SIM_NOW, name="relaxed.db"):
                                                                         str(when)))
     ctx.clock.set(when + timedelta(minutes=1))
     return ctx
+
+
+# ----------------------------------------------------------------------------- platform
+@pytest.fixture(autouse=True)
+def _no_nse_downloads(monkeypatch):
+    """Tests never reach NSE's servers: any bhavcopy download fails like a refused request."""
+    from platform_core import nse_files
+
+    def refuse(url, timeout=20.0):
+        raise RuntimeError(f"network disabled in tests: {url}")
+
+    monkeypatch.setattr(nse_files, "download", refuse)
+
+
+@pytest.fixture
+def platform_cfg(tmp_path):
+    """The shipped platform.yaml with every path resolved under tmp_path."""
+    import shutil
+
+    from platform_core.config import DEFAULT_PATH, load_platform_config
+
+    dst = tmp_path / "platform.yaml"
+    shutil.copy(DEFAULT_PATH, dst)
+    return load_platform_config(dst)
+
+
+@pytest.fixture
+def platform(mock_ctx, platform_cfg):
+    """Data service and platform database on the synthetic market."""
+    from types import SimpleNamespace
+
+    from platform_core.data_service import DataService
+    from platform_core.db import init_platform_db
+
+    pengine = init_platform_db(platform_cfg.db_path)
+    return SimpleNamespace(ctx=mock_ctx, cfg=platform_cfg, pengine=pengine,
+                           ds=DataService(mock_ctx, platform_cfg, pengine))
+

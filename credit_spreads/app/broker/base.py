@@ -48,6 +48,10 @@ class Quote:
     buy_total: int = 0          # all pending buy orders' quantity (Kite buy_quantity), beyond 5 levels
     sell_total: int = 0         # all pending sell orders' quantity (Kite sell_quantity)
     last_qty: int = 0           # size of the last trade
+    day_open: float = 0.0       # today's open, high and low so far, and yesterday's close (Kite "ohlc")
+    day_high: float = 0.0
+    day_low: float = 0.0
+    prev_close: float = 0.0
 
     @property
     def bid(self) -> float:
@@ -91,6 +95,10 @@ def parse_quote(key: str, raw: dict) -> Quote:
         buy_total=int(raw.get("buy_quantity") or 0),
         sell_total=int(raw.get("sell_quantity") or 0),
         last_qty=int(raw.get("last_quantity") or 0),
+        day_open=float((raw.get("ohlc") or {}).get("open") or 0.0),
+        day_high=float((raw.get("ohlc") or {}).get("high") or 0.0),
+        day_low=float((raw.get("ohlc") or {}).get("low") or 0.0),
+        prev_close=float((raw.get("ohlc") or {}).get("close") or 0.0),
     )
 
 

@@ -405,6 +405,12 @@ class SyntheticMarket:
                 buy.append({"price": round(bid - lvl * TICK, 2), "quantity": q_b, "orders": int(rng.integers(1, 9))})
             sell.append({"price": round(ask + lvl * TICK, 2), "quantity": q_s, "orders": int(rng.integers(1, 9))})
         day_open = self.price_at(info, di, 0)
+        if info.kind in ("EQ", "INDEX", "FUT"):            # running high/low of the session so far
+            marks = [self.price_at(info, di, k) for k in range(j + 1)] if info.kind == "FUT" else \
+                list(self.paths[info.name][di, :j + 1])
+            hi, lo = max(marks), min(marks)
+        else:
+            hi, lo = max(day_open, px), min(day_open, px)
         return {
             "instrument_token": info.token, "timestamp": ts, "last_trade_time": ts,
             "last_price": round(round_tick(px, up=False), 2),
@@ -412,8 +418,8 @@ class SyntheticMarket:
             "buy_quantity": int(sum(lv["quantity"] for lv in buy) * rng.uniform(1.5, 6)),
             "sell_quantity": int(sum(lv["quantity"] for lv in sell) * rng.uniform(1.5, 6)),
             "last_quantity": lot * int(rng.integers(1, 6)),
-            "ohlc": {"open": round(day_open, 2), "high": round(max(day_open, px), 2),
-                     "low": round(min(day_open, px), 2), "close": round(self.price_at(info, max(di - 1, 0), BARS), 2)},
+            "ohlc": {"open": round(day_open, 2), "high": round(hi, 2),
+                     "low": round(lo, 2), "close": round(self.price_at(info, max(di - 1, 0), BARS), 2)},
             "depth": {"buy": buy, "sell": sell},
         }
 
