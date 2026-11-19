@@ -3,7 +3,7 @@ margin blocking with the physical-delivery step-up, rejections, expiry settlemen
 and delivery brokerage, the per-account ledger and the account summaries."""
 
 import json
-from datetime import date
+from datetime import date, datetime
 from types import SimpleNamespace
 
 import pytest
@@ -278,3 +278,14 @@ def test_account_summaries_positions_and_funds(live, monkeypatch):
         closed = s.get(PTrade, pos[0]["id"])
     assert s2["pnl_r"] == pytest.approx(closed.pnl_r, abs=0.01)
     assert s2["total_pnl"] == pytest.approx(closed.pnl_inr, abs=0.05)
+
+
+def test_accounts_open_when_go_live_arrives_while_running(platform):
+    """The platform may be started before go_live_date; the first order on the day opens the accounts."""
+    cfg = platform.cfg.model_copy(update={"go_live_date": date(2026, 11, 9)})
+    b = PaperBroker(platform.pengine, cfg, DataService(platform.ctx, cfg, platform.pengine))
+    b.ensure_accounts()
+    assert not b.state("level_strict").started                                # the clock is on 6 Nov
+    platform.ctx.clock.set(datetime(2026, 11, 9, 15, 20))
+    r = b.open_spread(bear_call(b.ds))
+    assert r.ok and b.state("level_strict").started and b.state("oi_tight").started

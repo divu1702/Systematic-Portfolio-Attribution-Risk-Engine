@@ -34,7 +34,7 @@
   <h2>Open discretionary positions</h2>
   {% for p in positions %}
   <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--line)">
-    <div><strong>{{ p.symbol }}</strong> {{ p.direction.replace('_', ' ') }} {{ p.legs[0].strike }}/{{ p.legs[1].strike }} ×{{ p.lots }}
+    <div><strong>{{ p.symbol }}</strong> {{ p.direction.replace('_', ' ') }} {{ "%g"|format(p.legs[0].strike) }}/{{ "%g"|format(p.legs[1].strike) }} ×{{ p.lots }}
       <div class="small {{ (p.pnl or 0)|sign }}">{% if p.pnl is none %}–{% else %}{{ p.pnl|inr }}{% endif %}{% if p.pnl_r is not none %} ({{ "%+.2f"|format(p.pnl_r) }}R){% endif %}</div></div>
     <form method="post" action="/close/{{ p.id }}" onsubmit="return confirm('Close {{ p.symbol }}?')" style="width:110px"><button class="danger">Close</button></form>
   </div>

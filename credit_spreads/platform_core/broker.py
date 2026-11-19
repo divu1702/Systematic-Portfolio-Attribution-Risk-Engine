@@ -175,6 +175,9 @@ class PaperBroker:
         with self._lock:
             now, qty = self.ds.now(), order.qty
             st = self.state(order.account)
+            if not st.started and self.cfg.is_live(self.ds.today()):
+                self.ensure_accounts()                 # go_live_date reached while the platform was running
+                st = self.state(order.account)
             leg_info = [{"symbol": order.short_symbol, "side": "SELL", "qty": qty},
                         {"symbol": order.long_symbol, "side": "BUY", "qty": qty}]
             if not st.started:

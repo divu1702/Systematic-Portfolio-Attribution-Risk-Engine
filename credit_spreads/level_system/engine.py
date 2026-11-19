@@ -427,6 +427,12 @@ class LevelEngine:
                 rep.removed["event"] = rep.removed.get("event", 0) + 1
             elif not r.liquidity_ok:
                 rep.removed["liquidity"] = rep.removed.get("liquidity", 0) + 1
+        if not self.ds.events_fresh():
+            rep.warnings.append(f"event data is older than {self.cfg.screener.event_staleness_days} days: every stock was "
+                                "removed from the screener; upload the NSE events file from the phone")
+        missing = len(stocks) - len(spots)
+        if missing:
+            rep.warnings.append(f"no live quote for {missing} of {len(stocks)} F&O stocks")
         self.advance(snap, spots, rep, today)
         self.arm(snap, rows, rep, today)
         ranked = screener.rank(self, snap, rows)
@@ -510,6 +516,9 @@ class LevelEngine:
             expiring = s.scalars(select(PTrade).where(PTrade.status == "open", PTrade.expiry <= d)).all()
         symbols = sorted({r.symbol for r in setups} | {t.symbol for t in killed} | {t.symbol for t in expiring})
         eod = self.ds.official_eod(d, symbols) if symbols else None
+        if eod is not None and not eod.source.startswith(("nse", "import")):
+            rep.warnings.append("NSE's bhavcopy was not available (download refused and nothing in imports/bhavcopy): "
+                                "the re-check used Kite's end-of-day values")
         checks: List[CloseCheck] = []
         closes = {s_: v["close"] for s_, v in (eod.closes.items() if eod else []) if v.get("close")}
         for row in setups:

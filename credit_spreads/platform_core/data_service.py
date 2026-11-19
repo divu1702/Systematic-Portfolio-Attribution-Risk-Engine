@@ -233,13 +233,20 @@ class DataService:
             tok = self.equity_token(s)
             if not tok:
                 continue
-            rows = self.broker.historical(tok, datetime.combine(d, time(0)), datetime.combine(d, time(23, 59)), "day")
+            try:
+                rows = self.broker.historical(tok, datetime.combine(d, time(0)), datetime.combine(d, time(23, 59)), "day")
+            except Exception as exc:                  # no Kite session in the evening: NSE's files are all there is
+                log.warning("Kite end-of-day candle for %s unavailable: %s", s, exc)
+                continue
             if rows:
                 r = rows[-1]
                 eod.closes[s] = {k: float(r[k]) for k in ("open", "high", "low", "close")} | {"volume": r.get("volume")}
         if option_keys:
-            q = self.quotes(option_keys)
-            eod.kite_oi = {k: v.oi for k, v in q.items()}      # post-close OI, quantity
+            try:
+                q = self.quotes(option_keys)
+                eod.kite_oi = {k: v.oi for k, v in q.items()}      # post-close OI, quantity
+            except Exception as exc:
+                log.warning("Kite post-close OI unavailable: %s", exc)
         if missing and eod.source != "kite":
             eod.source += "+kite"
         return eod

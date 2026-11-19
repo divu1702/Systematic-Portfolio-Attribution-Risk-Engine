@@ -1,0 +1,154 @@
+"""The platform's daily schedule (spec: Schedule). IST, trading days only (NSE's holiday calendar), one job
+at a time (the earlier system's job lock), a failing job alerts instead of stopping the scheduler, and
+market jobs wait for a valid Kite session.
+
+Shared and level system:
+  08:45  Kite login link on Telegram (one daily login serves both systems)
+  08:45  events reminder when the newest events file is more than data.events_file_max_age_days old
+  09:25  daily margin recompute for every open position (basket margin plus the delivery step-up)
+  09:30  gap check: an overnight gap beyond a level exits at once
+  every exit_check_every_min minutes, 10:00-15:00: exit checks (profit targets; overdue exits)
+  15:20  screener, confirmations, entries and exits; daily report and Telegram summary
+  18:30  bhavcopy and the official re-check (close_mismatch), expiry settlement for every account,
+         account values, and after the last session of a month the monthly comparison
+Earlier OI-wall system, unchanged: instruments 08:30, events 08:45, gap check 09:20, monitor every
+5 minutes, scan 15:00 (entries only once go_live_date is reached), end of day 15:35, archive 16:10,
+quote snapshots and the weekly report. Its own 09:00 login reminder is replaced by the 08:45 link.
+"""
+
+from __future__ import annotations
+
+import logging
+from datetime import datetime, time
+from typing import Callable, Dict, List, Tuple
+
+from app.clock import IST, parse_hhmm
+
+log = logging.getLogger(__name__)
+
+
+def _hm(x: str) -> Dict[str, int]:
+    t = parse_hhmm(x)
+    return {"hour": t.hour, "minute": t.minute}
+
+
+def login_link(p) -> bool:
+    ctx = p.ctx
+    p.broker.ensure_accounts()                         # opens every account on go_live_date
+    if ctx.broker.session_valid():
+        return False
+    ctx.notifier.send("Good morning. One Kite login for the whole platform (both systems): "
+                      f"{ctx.broker.login_url()}  Then send the request_token with /token, or run "
+                      "`python -m platform_core login` on the laptop.", "login")
+    return True
+
+
+def events_reminder(p) -> bool:
+    """Telegram reminder when the newest events file is older than data.events_file_max_age_days."""
+    age = p.ds.newest_events_file_age_days()
+    limit = p.cfg.data.events_file_max_age_days
+    if age is not None and age <= limit:
+        return False
+    auto = p.ds.events_fresh()
+    what = "No events file has been uploaded yet" if age is None else f"The newest events file is {age:.1f} days old"
+    p.notifier.send(
+        f"{what}. Upload today's NSE board-meetings export from the phone (control centre, Upload). Event data older "
+        f"than {p.cfg.screener.event_staleness_days} days removes every stock from the screener."
+        + (" NSE's automated fetch is working today, so the file is a fallback." if auto else
+           " NSE's automated fetch is not working, so the file is what keeps the screener running."), "warning")
+    return True
+
+
+def margins(p) -> List[str]:
+    return p.broker.recompute_margins(p.today())
+
+
+def gap_check(p):
+    return p.engine.gap_check()
+
+
+def exit_check(p):
+    now = p.now().time()
+    if now > parse_hhmm("15:00") or now < parse_hhmm("10:00"):
+        return None
+    return p.engine.exit_check()
+
+
+def close_run(p):
+    from level_system import report
+
+    rep = p.engine.run_close()
+    root = p.cfg.resolve(p.cfg.paths.reports)
+    report.save_run(root, rep)
+    path = report.write_daily(p, rep)
+    p.notifier.send(report.telegram_summary(rep) + f"\nReport: {path.name}", "info")
+    for w in rep.warnings:
+        p.notifier.send(f"Level system: {w}", "warning")
+    return rep
+
+
+def official(p):
+    from level_system import comparison, report
+
+    from . import oi_bridge
+
+    d = p.today()
+    rep = p.engine.official_recheck(d)
+    rep.warnings += oi_bridge.sync_closed(p.ctx, p.broker)
+    try:
+        p.broker.record_day(d)                       # values after settlement (saved marks if Kite is closed)
+    except Exception as exc:
+        rep.warnings.append(f"account values not recorded: {exc}")
+    report.save_run(p.cfg.resolve(p.cfg.paths.reports), rep)
+    for w in rep.warnings:
+        p.notifier.send(f"18:30: {w}", "warning")
+    cal = p.ds.calendar()
+    if cal.next_trading_day(d).month != d.month:
+        path = comparison.write(p, d)
+        p.notifier.send(f"Monthly comparison for {d:%B %Y} ready: {path.name}", "info")
+    return rep
+
+
+def job_specs(p) -> List[Tuple[str, Dict, Callable, bool]]:
+    """(name, cron fields, function, needs a Kite session): the earlier system's jobs (its scan gated by
+    go_live_date) and the platform's. Pure data, so tests can inspect it."""
+    from app import scheduler as old
+    from app.jobs import scan_job
+
+    ctx, s, cfg = p.ctx, p.cfg.schedule, p.cfg
+    out = []
+    for name, fields, fn, needs in old.job_specs(ctx):
+        if name == "login_reminder":
+            continue
+        if name == "scan":
+            fn = (lambda: scan_job(ctx, enter=cfg.is_live(ctx.clock.today())))
+        out.append((f"oi_{name}", fields, fn, needs))
+    every = s.exit_check_every_min
+    minutes = ",".join(str(m) for m in range(0, 60, every)) if every < 60 else "0"
+    hours = "10-15" if every < 60 else f"10-15/{every // 60}"
+    out += [
+        ("login_link", _hm(s.login_link), lambda: login_link(p), False),
+        ("events_reminder", _hm(s.events_reminder), lambda: events_reminder(p), False),
+        ("margins", {"hour": 9, "minute": 25}, lambda: margins(p), True),
+        ("gap_check", _hm(s.gap_check), lambda: gap_check(p), True),
+        ("exit_checks", {"hour": hours, "minute": minutes}, lambda: exit_check(p), True),
+        ("level_close_run", _hm(cfg.screener.run_at), lambda: close_run(p), True),
+        ("official_recheck", _hm(s.official_recheck), lambda: official(p), False),
+    ]
+    return out
+
+
+def build_scheduler(p, blocking: bool = False):
+    from apscheduler.schedulers.background import BackgroundScheduler
+    from apscheduler.schedulers.blocking import BlockingScheduler
+    from apscheduler.triggers.cron import CronTrigger
+
+    from app.scheduler import Guard
+
+    sched = (BlockingScheduler if blocking else BackgroundScheduler)(timezone=IST)
+    for name, fields, fn, needs_session in job_specs(p):
+        fields = {"day_of_week": "mon-fri", **fields}
+        sched.add_job(Guard(p.ctx, name, fn, needs_session, trading_day_only=name != "oi_weekly_report"),
+                      CronTrigger(timezone=IST, **fields), id=name, name=name, max_instances=1, coalesce=True,
+                      misfire_grace_time=300)
+    return sched

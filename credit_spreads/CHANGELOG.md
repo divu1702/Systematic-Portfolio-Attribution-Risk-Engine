@@ -5,6 +5,25 @@ Each entry names the keys changed, old and new values, and the evidence.
 
 ## Unreleased
 
+### Level-Based Credit Spreads platform (System Spec, 19 Nov 2026)
+- New shared platform (`platform_core/`) and level-based strategy (`level_system/`), built in the spec's
+  milestone order. Five paper accounts (`oi_tight`, `oi_loose`, `level_strict`, `level_research`,
+  `discretionary`), ₹5,00,000 each from `go_live_date`, which is not set yet. One shared paper broker, one Kite
+  session, a phone control centre, and a combined schedule. Paper trading only.
+- `platform.yaml` holds the spec's template values unchanged. Added with the owner's approval (19 Nov 2026):
+  `setups.s3_trend_pullback.min_pullback_sessions: 2`, `setups.s4_range_rejection.day0_within_sessions: 3`,
+  `exits.event_exit: true` (level books), `settlement` (expiry settlement in every account, with
+  `stt_exercise: 0.0015` and `physical_delivery_brokerage_pct: 0.0025`, plus the delivery-margin steps),
+  `data.events_file_max_age_days: 1` (08:45 reminder) and `data.sectors_file_fresh_days: 90`. Operational
+  additions: the schedule times, `control_centre.host` and `port`, `oi_system`, and `paths`.
+- The earlier OI-wall system: its strategy rules are unchanged. Its fills and money records go through the
+  shared broker (main -> `oi_tight`, v2 -> `oi_loose`), and its entries start on `go_live_date`.
+  `costs.exchange_txn_pct` changes from 0.0003503 to 0.0003553 (0.03553% each side, owner-approved 19 Nov 2026,
+  the same as the platform). New `broker.margin_rps: 5.0` rate-limits Kite basket-margin calls.
+- To check on the laptop: Zerodha's physical-delivery margin steps (`settlement.delivery_margin_steps`,
+  `delivery_margin_full_pct`) and delivery brokerage rate. support.zerodha.com was not reachable from the build
+  machine.
+
 ### Strategies side by side (owner-approved restructure, 8 Nov 2026)
 - The scanner is split into layers: shared signals per stock (`strategy/signals.py`), entry rules per
   strategy (`strategy/rules.py`), spread construction per strategy (`strategy/structures.py`), and the
