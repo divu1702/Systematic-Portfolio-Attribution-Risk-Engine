@@ -165,6 +165,7 @@ class BrokerCfg(_Section):
     quote_batch: Annotated[int, Field(ge=1, le=500)] = 500
     quote_rps: Annotated[float, Field(gt=0, le=1)] = 1.0     # Kite quote API limit: 1 req/s
     hist_rps: Annotated[float, Field(gt=0, le=3)] = 3.0      # Kite historical API limit: 3 req/s
+    margin_rps: Annotated[float, Field(gt=0, le=10)] = 5.0   # basket-margin calls (Kite: 10 req/s for most APIs)
     mock_seed: NonNegInt = 7
     mock_symbols: Annotated[int, Field(ge=1, le=60)] = 20
 

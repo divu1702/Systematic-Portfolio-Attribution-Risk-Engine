@@ -64,6 +64,7 @@ class KiteBroker(Broker):
         self.session_path: Path = cfg.resolve(cfg.paths.kite_session)
         self._quote_rl = RateLimiter(cfg.broker.quote_rps)
         self._hist_rl = RateLimiter(cfg.broker.hist_rps)
+        self._margin_rl = RateLimiter(cfg.broker.margin_rps)
         self._token_loaded = False
 
     # ------------------------------------------------------------------ session
@@ -165,6 +166,7 @@ class KiteBroker(Broker):
     # ------------------------------------------------------------------ account
     def basket_margin(self, orders: List[dict]) -> float:
         self._require_session()
+        self._margin_rl.wait()
         res = self.kite.basket_order_margins(orders, consider_positions=False, mode="compact")
         for key in ("final", "initial"):
             total = (res.get(key) or {}).get("total")

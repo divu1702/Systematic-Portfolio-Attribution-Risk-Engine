@@ -71,6 +71,7 @@ broker:                                               # +
   quote_batch: 500
   quote_rps: 1.0
   hist_rps: 3.0
+  margin_rps: 5.0          # + basket-margin calls per second; the platform's screener makes many
   mock_seed: 7
   mock_symbols: 20
 scan: {top_n: 5}                                      # + candidates sent to sizing per scan
