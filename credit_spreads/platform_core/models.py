@@ -178,3 +178,15 @@ class PlatformState(PBase):
     key: Mapped[str] = mapped_column(String, primary_key=True)
     value: Mapped[Optional[str]] = mapped_column(Text)
     updated_at: Mapped[Optional[dt.datetime]] = mapped_column(DateTime)
+
+
+class AccountDay(PBase):
+    __tablename__ = "account_days"
+    date: Mapped[dt.date] = mapped_column(Date, primary_key=True)
+    account: Mapped[str] = mapped_column(ForeignKey("accounts.id"), primary_key=True)
+    value: Mapped[float] = mapped_column(Float)
+    cash_balance: Mapped[float] = mapped_column(Float)
+    used_margin: Mapped[float] = mapped_column(Float)
+    realised: Mapped[float] = mapped_column(Float)
+    unrealised: Mapped[float] = mapped_column(Float)
+
