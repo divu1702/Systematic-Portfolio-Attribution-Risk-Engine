@@ -137,6 +137,8 @@ class SetupRow(PBase):
     note: Mapped[Optional[str]] = mapped_column(Text)
     created_at: Mapped[dt.datetime] = mapped_column(DateTime)
     updated_at: Mapped[dt.datetime] = mapped_column(DateTime)
+    machine_json: Mapped[Optional[str]] = mapped_column(Text)
+    last_session: Mapped[Optional[dt.date]] = mapped_column(Date)
 
 
 class ScreenerRow(PBase):
