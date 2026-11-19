@@ -1,0 +1,81 @@
+# Level-Based Credit Spreads platform: five paper accounts through one shared paper broker.
+# Values are the owner's starting values (System Spec, 19 Nov 2026). Do not change them without the
+# owner's approval, and record every change in CHANGELOG.md. Keys marked "# +" are additions the owner
+# approved on 19 Nov 2026, or operational settings (paths, address of the control centre).
+
+go_live_date: null          # set by owner; starts all five accounts together
+capital: 500000             # per account
+accounts: [oi_tight, oi_loose, level_strict, level_research, discretionary]
+control_centre: {access: tailscale, pin_required: true, refresh_seconds: 30, host: 127.0.0.1, port: 8765}   # host, port +
+atr_period: 14
+volume_avg_sessions: 20
+swings:
+  major: {side_bars: 10, lookback: 250}
+  minor: {side_bars: 5}
+setups:
+  s1_failed_extension: {min_vol_mult: 2.0}
+  s2_breakout_hold: {min_vol_mult: 2.0, armed_sessions: 20, retest_atr: 0.5, acceptance_closes: 3}
+  s3_trend_pullback: {min_vol_mult: 1.0, min_pullback_sessions: 2}       # + a pullback lasts at least 2 sessions
+  s4_range_rejection: {min_vol_mult: 1.0, cluster_atr: 0.5, lookback: 60, min_height_atr: 3.0, touch_atr: 0.25,
+                       day0_within_sessions: 3}                            # + Day 0 on the touch session or within 3
+confirmation: {window_sessions: 2, zone_strikes_per_side: 3, oi_tolerance: 0.10}
+strikes:
+  min_rom: 0.10
+  width_atr: 1.5
+liquidity:
+  min_oi_value_inr: 30000000
+  max_spread_pct: 0.05
+sizing:
+  risk_at_stop: 0.05
+  iv_cushion_points: 5
+  gap_cap_position: 0.15
+  gap_cap_portfolio: 0.25
+  max_positions: 3
+  one_per_sector: true
+expiry: {min_dte_current_month: 15}
+exits:
+  profit_target_capture: 0.70
+  time_stop_trading_days_before_expiry: 5
+  event_exit: true          # + level books: a results date or board meeting announced before the time stop exits the
+                            #   trade at the 15:20 snapshot of the last session before the event
+screener: {run_at: '15:20', report_top_n: 20, event_staleness_days: 2}
+strength_signals: {hvn_lookback: 60, hvn_source: 1minute, hvn_bucket_atr: 0.1}
+paper: {extra_slip_ticks: 1}
+journal: {match_window_sessions: 2, default_1r: max_loss}
+books: {research_enabled: true, research_exempt_from_portfolio_limits: true}
+market_filter: {index: NIFTY 50, swing_side_bars: 5, mode: log_only}
+review: {min_strict_trades_before_changes: 30, min_trades_per_filter_group: 30}
+costs:
+  brokerage_per_order: 20
+  stt_sell_premium: 0.0015
+  exchange_txn_pct: 0.0003553   # 0.03553% of premium, each side (Zerodha charges page, Nov 2026)
+  sebi_fee_per_crore: 10
+  stamp_buy_pct: 0.00003
+  gst: 0.18
+settlement:                 # + positions still open at expiry settle at intrinsic value, in every account
+  stt_exercise: 0.0015      # STT on exercised options, on intrinsic value (Finance Act 2026, from 1 Apr 2026)
+  physical_delivery_brokerage_pct: 0.0025   # Zerodha: 0.25% of the physically settled value
+  # Physical-delivery margin step-up, as a share of the full delivery margin on the 4, 3, 2 and 1 sessions before
+  # expiry (the exchange's staggered schedule; full margin on expiry day). Check both numbers against Zerodha's
+  # policy page on the laptop: support.zerodha.com was not reachable from the build machine.
+  delivery_margin_steps: [0.10, 0.25, 0.45, 0.70]
+  delivery_margin_full_pct: 0.20            # full delivery margin as a share of the in-the-money delivery value
+schedule:                   # + the spec's daily times (IST, trading days)
+  login_link: '08:45'
+  events_reminder: '08:45'
+  gap_check: '09:30'
+  exit_check_every_min: 30
+  official_recheck: '18:30'
+data:                       # +
+  events_file_max_age_days: 1     # Telegram reminder at 08:45 when the newest events file is older than this
+  sectors_file_fresh_days: 90     # sectors.csv counts as fresh for 90 days
+oi_system:                  # + the earlier system's two books, traded as the oi_tight and oi_loose accounts
+  config: config.yaml
+  books: {oi_tight: main, oi_loose: v2}
+paths:                      # +
+  db: data/platform.db
+  chain_snap: data/chain_snap
+  reports: reports/platform
+  imports: imports
+  sectors_file: sectors.csv
+  fixtures: tests/fixtures/realdays

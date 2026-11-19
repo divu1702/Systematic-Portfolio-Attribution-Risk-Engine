@@ -12,3 +12,10 @@ jinja2>=3.1               # weekly HTML report
 pytest>=7.4
 
 # Optional dashboard:  pip install streamlit
+
+# Level-Based Credit Spreads platform (spec's suggested stack)
+fastapi>=0.110            # control centre (platform_core/web)
+uvicorn>=0.27             # serves the control centre on the laptop
+python-multipart>=0.0.9   # form posts and the events-file upload
+pyarrow>=15               # option chain snapshots as Parquet
+httpx>=0.27               # FastAPI test client
