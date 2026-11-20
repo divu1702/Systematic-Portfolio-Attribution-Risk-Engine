@@ -296,7 +296,11 @@ def run_archive(ctx, budget: Optional[int] = None, progress: Optional[Callable[[
                           ("future_cont", sym, str(today), len(rows)))
         store.commit()
 
-        # 3. Option and futures contracts: final passes first, then first passes.
+        # 3. Option and futures contracts: final passes first, then first passes (unless the platform's
+        #    data repository archives them: archive.contracts = false).
+        if not ac.contracts:
+            store.commit()
+            return rep
         prog = {ts: (last, final) for ts, last, final in
                 store.execute("SELECT tradingsymbol, last_date, final FROM archive_progress")}
         spots = _spots(ctx, store, stocks, today)

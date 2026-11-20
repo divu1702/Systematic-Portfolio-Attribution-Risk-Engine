@@ -55,7 +55,7 @@ python -m pytest tests/test_level_realdays.py            # the spec's two real-d
 git add tests/fixtures/realdays && git commit -m "Real-day fixtures"   # keep them with the code
 ```
 
-Then leave `python -m platform_core run` running from 08:40 to 18:35 on trading days, with the laptop plugged
+Then leave `python -m platform_core run` running from 08:40 to 18:45 on trading days, with the laptop plugged
 in, sleep off and on wifi. That one process runs the scheduler for both systems, the control centre on
 `127.0.0.1:8765`, and the Telegram bot (`/token`, `/status`, `/kill` …).
 
@@ -91,8 +91,12 @@ tailnet: only your own devices can reach it, and it is never on the public inter
 | every 30 min, 10:00-15:00 | Level system exit checks (profit target; overdue time or event exits) |
 | 15:00 | OI-wall scan; its entries start on `go_live_date` |
 | 15:20 | Level system: exits on the snapshot, screener, confirmations, entries, ROI ranking, daily report and Telegram summary |
-| 15:35, 16:10 | OI-wall end of day; history archiver |
+| 09:14-15:31 | Data repository: live minute quotes over Kite's WebSocket (see "Data repository") |
+| 15:35, 16:10 | OI-wall end of day; its daily bars (stocks, index, continuous futures) |
+| 16:30 | Data repository: 1-minute candles of every listed stock option and future, stocks and indices |
+| 17:45 | Data repository: older stock and index minutes from Kite, past NSE bhavcopies |
 | 18:30 | Bhavcopy download and official re-check (`close_mismatch`), expiry settlement for every account, monthly comparison after the month's last session |
+| 18:40 | Data repository: NSE's daily files, the OI unit check, compaction, a Telegram summary |
 
 The control centre's pages refresh every 30 seconds. Telegram carries alerts only: entries, exits, rejections
 and data failures.
@@ -104,6 +108,46 @@ report shows what each book would have entered (marked "dry run"). No account tr
 accounts together, set `go_live_date: YYYY-MM-DD` in `platform.yaml` and restart. After that, the strategy rules
 stay fixed until 30 strict-book trades have closed, apart from critical fixes. Record every change in
 `CHANGELOG.md`.
+
+### Data repository (Indian stock futures and options)
+
+`datalake/` builds a market-data repository for future backtests: every F&O stock's futures and options
+at 1 minute, live quotes once a minute, and NSE's official end-of-day files, as Parquet under
+`lake.root` (`data/lake` by default; point it at an external drive or a server's disk in `platform.yaml`).
+
+| Dataset | What | Source and timing | About per year |
+|---------|------|-------------------|----------------|
+| `options_1m` | OHLC, volume, OI for every listed strike of the next 3 monthly series | Kite, after the close; each contract at 45 and 20 days to expiry and in its last 3 sessions (Kite deletes expired contracts) | ~4 GB |
+| `futures_1m` | the same for every stock future | Kite, after the close | ~0.5 GB |
+| `equity_1m` | every F&O stock, NIFTY 50, NIFTY BANK, India VIX | Kite, daily top-up; history back to 2015 as Kite has it | ~0.3 GB (+~3 GB history) |
+| `quotes_1m` | bid, ask, sizes, orders, last, volume, OI, pending buy/sell, once a minute, for ~9,000 instruments (indices, stocks, all futures, nearest strikes) | Kite WebSocket, 09:14-15:31 | ~15-20 GB (`depth: true` ~3x) |
+| `bhav_fo`, `bhav_cm` | NSE bhavcopies, every contract, parsed; plus delivery, F&O ban list, daily volatility, participant OI, lot sizes and index closes kept as published | NSE at 18:40; 5 years back, 300 files a night | under 1 GB |
+| `instruments` | the day's instrument master (tokens, lots, strikes) | Kite, daily | ~0.3 GB |
+
+Query it from Python or DuckDB:
+
+```python
+from datalake.api import Lake
+lk = Lake("data/lake")
+lk.options("ANGELONE", expiry="2026-12-29", start="2026-11-17")      # 1-minute candles with OI
+lk.chain_at("ANGELONE", "2026-12-29", "2026-11-17 15:20")           # every strike at that minute
+lk.quotes("2026-11-17", underlying="ANGELONE")                       # minute bid/ask
+lk.bhav_fo("ANGELONE", start="2022-01-01")                           # official end of day
+```
+
+`python -m platform_core lake status` shows sizes, coverage, gaps and growth;
+`lake sql "SELECT ... FROM options_1m ..."` runs a query; `lake candles | backfill | nse | nse-backfill |
+compact | quotes` run one job now; `lake migrate` moves anything the earlier archiver saved
+(`data/market_nse.db`) into the repository once. The earlier archiver now keeps only its daily bars
+(`archive.contracts: false`), so contracts are not fetched twice, and the research study reads the
+repository (`--lake`).
+
+Limits worth knowing: candles are trades only, so bid/ask history exists only from the day the quote
+recorder first runs, and only while the platform is running; Kite has no history for expired contracts,
+so a contract the nightly job misses entirely is gone (recorded as a gap); NSE may refuse automated
+downloads, in which case upload the file from the phone (Upload page) or save it into
+`imports/bhavcopy/`. Whether NSE's OI counts lots or shares is settled against Kite on the first evening
+with a session, and the platform's official re-check uses the answer.
 
 ### Data the platform keeps
 
@@ -196,7 +240,7 @@ python -m pytest              # ~230 offline tests
 | 15:00 | Scan, then paper entries for the top candidates that pass sizing and portfolio limits. |
 | 15:35 | Daily candles, levels, turnover, events, equity and drawdown. |
 | every 15 min, 09:32-15:17 | Bid/ask snapshots of the strikes the strategy trades, saved for backtests (see below). |
-| 16:10 | Kite history archiver: saves 1-minute candles of listed options and futures before Kite drops them (see below). |
+| 16:10 | Kite history archiver: daily stock, index and continuous-futures bars (on the platform, option and futures candles go to the data repository). |
 | Friday 16:00 | Weekly HTML report in `reports/`. |
 
 If the laptop sleeps, the next monitor run replays the missed 5-minute marks from Kite candles
@@ -418,6 +462,8 @@ platform_core/   the shared platform
   config.py (platform.yaml)  db.py models.py migrations/  parquet_store.py  data_service.py  nse_files.py
   fills.py costs.py broker.py accounts.py   oi_bridge.py (the OI-wall system as oi_tight / oi_loose)
   discretionary.py  runtime.py  scheduler.py  cli.py doctor.py  control/ (FastAPI app, auth, templates)
+datalake/        the market-data repository
+  store.py (Parquet parts, compaction, catalog)  api.py (queries)  candles.py  quotes.py  nse.py  migrate.py  status.py
 level_system/    the level-based strategy
   analytics.py setups.py state.py store.py strikes.py sizing.py screener.py engine.py report.py comparison.py fixtures.py
 app/             the earlier OI-wall system

@@ -165,8 +165,11 @@ def from_imports(folder: Path, kind: str, d: date) -> Optional[str]:
     return None
 
 
-def official_eod(d: date, import_dir: Path, lots: Optional[Dict[str, int]] = None, fetch=None) -> Optional[OfficialEOD]:
-    """NSE's official values for `d`, from the archive or the import folder; None if neither has them."""
+def official_eod(d: date, import_dir: Path, lots: Optional[Dict[str, int]] = None, fetch=None,
+                 oi_unit: str = "lots") -> Optional[OfficialEOD]:
+    """NSE's official values for `d`, from the archive or the import folder; None if neither has them.
+    `oi_unit`: what the bhavcopy's OI counts, "lots" or "quantity" (the data repository checks it
+    against Kite on its first evening)."""
     fetch = fetch or download
     texts, source = {}, None
     for kind, url in (("FO", FO_URL), ("CM", CM_URL)):
@@ -191,5 +194,5 @@ def official_eod(d: date, import_dir: Path, lots: Optional[Dict[str, int]] = Non
     if "CM" in texts:
         eod.closes = parse_cm(texts["CM"])
     if "FO" in texts:
-        eod.oi, eod.settle = parse_fo(texts["FO"], lots)
+        eod.oi, eod.settle = parse_fo(texts["FO"], lots, oi_unit=oi_unit)
     return eod

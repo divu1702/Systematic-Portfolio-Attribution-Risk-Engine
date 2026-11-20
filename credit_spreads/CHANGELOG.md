@@ -5,6 +5,20 @@ Each entry names the keys changed, old and new values, and the evidence.
 
 ## Unreleased
 
+### Market-data repository (owner: "go with defaults", 20 Nov 2026)
+- New `datalake/`: Parquet repository with a SQLite catalog under `lake.root` (`data/lake`). Nightly 1-minute
+  candles with OI for every listed strike of the next 3 series and every stock future (passes at 45 and 20
+  days and in the last 3 sessions), stock and index minutes with backfill to 2015, live minute quotes for
+  ~9,000 instruments over Kite's WebSocket (3 connections, one process each), NSE's daily files (raw and
+  parsed bhavcopies) with a 5-year bhavcopy backfill, an empirical check of NSE's OI unit, migration of the
+  earlier archiver's data, `lake` commands and a Telegram summary at 18:40.
+- New settings: `lake` in platform.yaml; `broker.margin_rps` was added earlier. In config.yaml,
+  `archive.contracts: false` (new key): the earlier archiver keeps its daily bars and leaves option and futures
+  candles to the repository, so nothing is fetched twice. The archiver's own tests and the study's pipeline
+  test switch contracts on explicitly.
+- The research study reads the repository (`--lake`, default `data/lake`) as well as the earlier store.
+- New requirement: `duckdb`.
+
 ### Level-Based Credit Spreads platform (System Spec, 19 Nov 2026)
 - New shared platform (`platform_core/`) and level-based strategy (`level_system/`), built in the spec's
   milestone order. Five paper accounts (`oi_tight`, `oi_loose`, `level_strict`, `level_research`,

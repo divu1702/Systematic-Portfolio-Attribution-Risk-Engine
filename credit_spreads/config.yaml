@@ -132,6 +132,8 @@ archive:                     # + save Kite option history before it disappears (
   max_requests_per_run: 12000  # ~67 minutes at most at 3 requests a second; the rest continues next run
   equity_days: 2000
   index: "NIFTY 50"          # market index saved alongside, for each stock's beta
+  contracts: false           # + option and futures candles now go to the data repository (platform.yaml lake),
+                             #   every strike; this archiver keeps the daily stock, index and continuous bars
 snapshots:                   # + intraday bid/ask for the strikes the strategy trades (needs the Kite session)
   every_min: 15              # 0 = off. 09:32, 09:47, ... (offset from the 5-minute monitor)
   offset_min: 2

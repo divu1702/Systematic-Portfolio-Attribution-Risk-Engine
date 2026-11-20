@@ -143,7 +143,7 @@ def test_study_reads_what_the_archiver_and_recorder_save(study, mock_ctx, capsys
     ctx = mock_ctx
     ctx.cache["archive_on_mock"] = True
     ctx.cfg = ctx.cfg.model_copy(update={"archive": ctx.cfg.archive.model_copy(
-        update={"band": 0.06, "max_expiries": 2, "equity_days": 200})})
+        update={"band": 0.06, "max_expiries": 2, "equity_days": 200, "contracts": True})})
     run_archive(ctx, budget=10**6)
     ctx.is_mock = False                                # the recorder is off for mock contexts
     try:

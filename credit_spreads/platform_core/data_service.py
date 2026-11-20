@@ -226,7 +226,8 @@ class DataService:
                     lots[s] = inst.load_chain(self.ctx.engine, today, s, exps[0]).lot_size
             except LookupError:
                 pass
-        eod = nse_files.official_eod(d, self.ctx.cfg.resolve(self.ctx.cfg.paths.imports) / "bhavcopy", lots)
+        eod = nse_files.official_eod(d, self.ctx.cfg.resolve(self.ctx.cfg.paths.imports) / "bhavcopy", lots,
+                                     oi_unit=get_state(self.pengine, "nse_oi_unit", "lots"))
         eod = eod or nse_files.OfficialEOD(d, "kite")
         missing = [s for s in symbols if s not in eod.closes]
         for s in missing:

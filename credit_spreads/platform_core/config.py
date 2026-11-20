@@ -221,6 +221,47 @@ class OISystemCfg(_S):
         return v
 
 
+class LakeQuotesCfg(_S):
+    enabled: bool = True
+    max_instruments: PosInt = 9000          # Kite: 3 WebSocket connections per API key
+    per_connection: Annotated[int, Field(gt=0, le=3000)] = 3000
+    depth: bool = False                     # True: all 5 depth levels (about 3x the space)
+    start: str = "09:14"
+    end: str = "15:31"
+    flush_min: PosInt = 15                  # write a part file this often (bounds what a crash loses)
+    roll_days: NonNegInt = 4                # when the near month has this few sessions left, rank the next month first
+
+    @field_validator("start", "end")
+    @classmethod
+    def _times(cls, v: str) -> str:
+        return _hhmm(v)
+
+
+class LakeNseCfg(_S):
+    daily: bool = True
+    backfill_years: NonNegInt = 5
+    backfill_files_per_run: NonNegInt = 300
+    pause_s: NonNegFloat = 2.0              # between NSE downloads: be a polite client
+
+
+class LakeCfg(_S):
+    """The market-data repository (datalake/): Parquet files plus a catalog."""
+    enabled: bool = True
+    root: str = "data/lake"
+    expiries: PosInt = 3
+    strikes: Literal["all", "band"] = "all"
+    band_pct: Fraction = 0.25
+    first_pass_dte: PosInt = 45
+    mid_pass_dte: NonNegInt = 20            # 0 = no middle pass
+    final_pass_days: PosInt = 3
+    max_requests_per_run: PosInt = 12000
+    backfill_requests_per_run: NonNegInt = 2000
+    equity_minute_since: date = date(2015, 1, 1)
+    indices: List[str] = Field(default_factory=lambda: ["NIFTY 50", "NIFTY BANK", "INDIA VIX"])
+    quotes: LakeQuotesCfg = LakeQuotesCfg()
+    nse: LakeNseCfg = LakeNseCfg()
+
+
 class PathsCfg(_S):
     db: str = "data/platform.db"
     chain_snap: str = "data/chain_snap"
@@ -257,6 +298,7 @@ class PlatformConfig(_S):
     schedule: ScheduleCfg = ScheduleCfg()
     data: DataCfg = DataCfg()
     oi_system: OISystemCfg = OISystemCfg()
+    lake: LakeCfg = LakeCfg()
     paths: PathsCfg = PathsCfg()
     base_dir: Path = Field(default=PROJECT_ROOT, exclude=True)
 

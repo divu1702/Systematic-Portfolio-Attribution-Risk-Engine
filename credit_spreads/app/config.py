@@ -329,6 +329,8 @@ class ArchiveCfg(_Section):
     max_requests_per_run: PosInt = 12000                    # ~67 minutes at Kite's 3 requests a second
     equity_days: Annotated[int, Field(ge=30, le=2000)] = 2000
     index: str = "NIFTY 50"                                 # market index (NSE INDICES segment) for beta
+    contracts: bool = False                                 # False: option and futures candles are left to the
+                                                            # platform's data repository (datalake/)
 
 
 class SnapshotCfg(_Section):

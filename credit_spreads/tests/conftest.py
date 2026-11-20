@@ -112,6 +112,12 @@ def _no_nse_downloads(monkeypatch):
         raise RuntimeError(f"network disabled in tests: {url}")
 
     monkeypatch.setattr(nse_files, "download", refuse)
+    from datalake import nse as lake_nse
+
+    def refuse_lake(url, timeout=25.0):
+        raise lake_nse.Refused(f"network disabled in tests: {url}")
+
+    monkeypatch.setattr(lake_nse, "download", refuse_lake)
 
 
 @pytest.fixture

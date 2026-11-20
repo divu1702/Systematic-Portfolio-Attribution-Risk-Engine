@@ -15,7 +15,8 @@ NOV, DEC = date(2026, 11, 24), date(2026, 12, 29)
 
 
 def _archive_cfg(ctx, **kw):
-    base = {"band": 0.04, "max_expiries": 2, "equity_days": 120, "index": "SYNTHETIC INDEX"}
+    base = {"band": 0.04, "max_expiries": 2, "equity_days": 120, "index": "SYNTHETIC INDEX",
+            "contracts": True}                         # the platform's repository archives contracts by default
     ctx.cfg = ctx.cfg.model_copy(update={"archive": ctx.cfg.archive.model_copy(update={**base, **kw})})
     return ctx
 

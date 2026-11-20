@@ -157,3 +157,26 @@ def test_cli_set_pin_doctor_and_status(tmp_path, platform_cfg, capsys):
     out = capsys.readouterr().out
     assert "CONTROL_PIN_HASH               set" in out and "2468" not in out and "x\n" not in out
     assert "no control-centre PIN" not in out
+
+
+def test_data_repository_jobs(plat, platform_cfg, capsys):
+    specs = {name: fields for name, fields, _, _ in S.job_specs(plat)}
+    assert specs["lake_quotes_start"] == {"hour": 9, "minute": 14} and specs["lake_quotes_stop"] == {"hour": 15, "minute": 32}
+    assert specs["lake_candles"] == {"hour": 16, "minute": 30} and specs["lake_nse"] == {"hour": 18, "minute": 40}
+    assert "synthetic market" in S.lake_quotes_start(plat)
+    assert S.lake_quotes_stop(plat) == "quote recording was not running"
+    plat.ctx.cache["archive_on_mock"] = True
+    plat.cfg = plat.cfg.model_copy(update={"lake": plat.cfg.lake.model_copy(update={
+        "strikes": "band", "band_pct": 0.03, "expiries": 1, "indices": ["SYNTHETIC INDEX"],
+        "equity_minute_since": date(2026, 9, 1), "backfill_requests_per_run": 50,
+        "nse": plat.cfg.lake.nse.model_copy(update={"backfill_files_per_run": 4, "pause_s": 0.0})})})
+    rep = S.lake_candles(plat)
+    assert rep.options > 0 and rep.rows > 0
+    msg = S.lake_backfill(plat)
+    assert "history chunks backfilled" in msg and "NSE files" in msg
+    S.lake_nse(plat)                                                     # NSE refuses in tests: recorded, not fatal
+    text = next(t for _, t in reversed(plat.sent) if t.startswith("NSE files"))
+    assert "refused by NSE" in text and "Data repository at" in text
+    cli.main(["--config", str(platform_cfg.base_dir / "platform.yaml"), "lake", "status"])
+    assert "Data repository at" in capsys.readouterr().out
+

@@ -11,6 +11,8 @@ Shared and level system:
   15:20  screener, confirmations, entries and exits; daily report and Telegram summary
   18:30  bhavcopy and the official re-check (close_mismatch), expiry settlement for every account,
          account values, and after the last session of a month the monthly comparison
+Data repository (datalake/): 09:14 live minute quotes start (until 15:31), 16:30 option, futures, stock
+and index 1-minute candles, 17:45 history backfill (Kite and NSE), 18:40 NSE's daily files and a summary.
 Earlier OI-wall system, unchanged: instruments 08:30, events 08:45, gap check 09:20, monitor every
 5 minutes, scan 15:00 (entries only once go_live_date is reached), end of day 15:35, archive 16:10,
 quote snapshots and the weekly report. Its own 09:00 login reminder is replaced by the 08:45 link.
@@ -19,7 +21,7 @@ quote snapshots and the weekly report. Its own 09:00 login reminder is replaced 
 from __future__ import annotations
 
 import logging
-from datetime import datetime, time
+from datetime import date, datetime, time, timedelta
 from typing import Callable, Dict, List, Tuple
 
 from app.clock import IST, parse_hhmm
@@ -109,6 +111,60 @@ def official(p):
     return rep
 
 
+# ---------------------------------------------------------------------- the data repository (datalake/)
+def lake_quotes_start(p) -> str:
+    from datalake.quotes import Recorder
+
+    if getattr(p.ctx, "is_mock", False):
+        return "live quotes are not recorded on the synthetic market"
+    rec = getattr(p, "recorder", None) or Recorder(p)
+    p.recorder = rec
+    msg = rec.start()
+    if "not started" in msg or "off" in msg:
+        p.notifier.send(f"Data repository: {msg}", "warning")
+    return msg
+
+
+def lake_quotes_stop(p) -> str:
+    rec = getattr(p, "recorder", None)
+    if rec is None:
+        return "quote recording was not running"
+    msg = rec.stop()
+    p.recorder = None
+    return msg
+
+
+def lake_candles(p):
+    from datalake import candles
+
+    rep = candles.run(p)
+    if rep.urgent or rep.missed:
+        p.notifier.send(f"Data repository: {rep.text()}", "warning")
+    return rep
+
+
+def lake_backfill(p):
+    from datalake import candles, nse
+
+    msgs = []
+    if p.cfg.lake.backfill_requests_per_run:
+        msgs.append(candles.run_backfill(p).text())
+    if p.cfg.lake.nse.backfill_years:
+        msgs.append(nse.backfill(p).text())
+    return "; ".join(msgs)
+
+
+def lake_nse(p):
+    """NSE's daily files, the OI unit check, compaction of finished partitions, and a short summary."""
+    from datalake import candles, nse, status
+
+    rep = nse.run_daily(p)
+    n = candles.compact_finished(p)
+    text = status.report(p.cfg.resolve(p.cfg.lake.root), p.today(), short=True)
+    p.notifier.send(f"{rep.text()}; {n} partitions compacted.\n{text}", "info")
+    return rep
+
+
 def job_specs(p) -> List[Tuple[str, Dict, Callable, bool]]:
     """(name, cron fields, function, needs a Kite session): the earlier system's jobs (its scan gated by
     go_live_date) and the platform's. Pure data, so tests can inspect it."""
@@ -135,6 +191,17 @@ def job_specs(p) -> List[Tuple[str, Dict, Callable, bool]]:
         ("level_close_run", _hm(cfg.screener.run_at), lambda: close_run(p), True),
         ("official_recheck", _hm(s.official_recheck), lambda: official(p), False),
     ]
+    lk = cfg.lake
+    if lk.enabled:
+        q = lk.quotes
+        stop = (datetime.combine(date.today(), parse_hhmm(q.end)) + timedelta(minutes=1)).time()
+        out += [
+            ("lake_quotes_start", _hm(q.start), lambda: lake_quotes_start(p), True),
+            ("lake_quotes_stop", {"hour": stop.hour, "minute": stop.minute}, lambda: lake_quotes_stop(p), False),
+            ("lake_candles", {"hour": 16, "minute": 30}, lambda: lake_candles(p), True),
+            ("lake_backfill", {"hour": 17, "minute": 45}, lambda: lake_backfill(p), True),
+            ("lake_nse", {"hour": 18, "minute": 40}, lambda: lake_nse(p), False),
+        ]
     return out
 
 

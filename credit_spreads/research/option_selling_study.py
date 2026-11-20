@@ -29,6 +29,8 @@ import sys
 from datetime import date
 from pathlib import Path
 
+from typing import Optional
+
 import numpy as np
 import pandas as pd
 
@@ -167,8 +169,52 @@ def intraday_prices(conn, at: int = 900, window: int = 30) -> pd.DataFrame:
 CAPITAL_EVENTS = ("bonus", "split", "rights", "demerger")
 
 
+def lake_frames(root: Path, at: int = 900, window: int = 30):
+    """The platform's data repository (datalake/) in the shapes load_nse uses: daily option closes, daily
+    futures closes and the synchronous intraday prices (as intraday_prices builds from the archiver)."""
+    import duckdb
+
+    root = Path(root)
+    keys = ["date", "symbol", "expiration", "strike", "cp"]
+    empty = (pd.DataFrame(columns=keys + ["px"]), pd.DataFrame(columns=["date", "symbol", "expiration", "fwd"]),
+             pd.DataFrame(columns=keys + ["px", "fwd", "T", "stale"]))
+    if not list(root.glob("options_1m/*/*/*.parquet")) or not list(root.glob("futures_1m/*/*.parquet")):
+        return empty
+    con = duckdb.connect()
+
+    def src(dataset, depth):
+        pattern = (root / dataset).as_posix() + "/" + "/".join(["*"] * depth) + "/*.parquet"
+        return (f"(SELECT * EXCLUDE (filename) FROM read_parquet('{pattern}', hive_partitioning=true, filename=true, "
+                f"union_by_name=true) QUALIFY row_number() OVER (PARTITION BY tradingsymbol, ts ORDER BY filename DESC) = 1)")
+
+    o, f = src("options_1m", 2), src("futures_1m", 1)
+    con.execute(f"CREATE TEMP VIEW o AS SELECT CAST(ts AS DATE) AS date, underlying AS symbol, expiry AS expiration, "
+                f"strike, cp, ts, hour(ts) * 60 + minute(ts) AS m, close, volume FROM {o} WHERE volume > 0 AND close > 0")
+    con.execute(f"CREATE TEMP VIEW f AS SELECT CAST(ts AS DATE) AS date, underlying AS symbol, expiry AS expiration, "
+                f"ts, hour(ts) * 60 + minute(ts) AS fm, close FROM {f} WHERE close > 0")
+    oc = con.execute("SELECT date, symbol, expiration, strike, cp, arg_max(close, ts) AS px FROM o GROUP BY ALL").df()
+    fc = con.execute("SELECT date, symbol, expiration, arg_max(close, ts) AS fwd FROM f GROUP BY ALL").df()
+    target = at - 1                                           # the 1-minute candle whose close is nearest `at`
+    ip = con.execute(
+        f"WITH pick AS (SELECT date, symbol, expiration, strike, cp, arg_min(m, abs(m - {target})) AS m, "
+        f"arg_min(close, abs(m - {target})) AS px, min(abs(m - {target})) AS dist FROM o GROUP BY ALL), "
+        f"j AS (SELECT p.date, p.symbol, p.expiration, p.strike, p.cp, p.m, p.px, p.dist, "
+        f"arg_min(f.close, abs(f.fm - p.m)) AS fwd, min(abs(f.fm - p.m)) AS fdist FROM pick p LEFT JOIN f "
+        f"ON f.date = p.date AND f.symbol = p.symbol AND f.expiration = p.expiration GROUP BY ALL) "
+        f"SELECT date, symbol, expiration, strike, cp, "
+        f"CASE WHEN dist <= {window} AND fdist <= 15 THEN px END AS px, "
+        f"CASE WHEN dist <= {window} AND fdist <= 15 THEN fwd END AS fwd, "
+        f"CASE WHEN dist <= {window} AND fdist <= 15 THEN ((expiration - date) * 1440 + (930 - (m + 1))) / (365.0 * 1440) END AS T, "
+        f"NOT (dist <= {window} AND COALESCE(fdist, 999) <= 15) AS stale FROM j").df()
+    con.close()
+    for df in (oc, fc, ip):
+        df["date"], df["expiration"] = pd.to_datetime(df["date"]), pd.to_datetime(df["expiration"])
+    ip["stale"] = ip["stale"].astype(bool)
+    return oc, fc, ip
+
+
 def load_nse(db: Path, assume_spread: float = 0.04, r: float = 0.065, tick: float = 0.05, min_obs: int = 20,
-             at: int = 900, window: int = 30):
+             at: int = 900, window: int = 30, lake: Optional[Path] = None):
     """The Indian store in the same shapes as load(): bars, chains, earnings, splits, plus a note.
 
     Option rows come from two writers. Recorded 15:00 quotes (real bid/ask) are used as they are.
@@ -202,6 +248,12 @@ def load_nse(db: Path, assume_spread: float = 0.04, r: float = 0.065, tick: floa
     ev = q("SELECT symbol, event_date AS date, event_type FROM events_seen", ["date"])
     ip = intraday_prices(conn, at, window)
     conn.close()
+    if lake is not None and Path(lake).exists():               # the data repository: every strike, 1-minute
+        loc, lfc, lip = lake_frames(Path(lake), at, window)
+        if len(loc):
+            oc = pd.concat([oc, loc], ignore_index=True).drop_duplicates(keys, keep="last")
+            fc = pd.concat([fc, lfc], ignore_index=True).drop_duplicates(["date", "symbol", "expiration"], keep="last")
+            ip = pd.concat([ip, lip], ignore_index=True).drop_duplicates(keys, keep="last")
     spot = bars[["symbol", "date", "close"]].rename(columns={"close": "spot"})
 
     def forward(df, fut):
@@ -571,12 +623,14 @@ def main(argv=None) -> None:
     ap.add_argument("--risk-free", type=float, default=0.065, help="NSE only: rate for Black-76 (as config.yaml)")
     ap.add_argument("--at", default="15:00", help="NSE only: price options at the trade nearest this time (HH:MM)")
     ap.add_argument("--window", type=int, default=30, help="NSE only: ... within this many minutes, else drop")
+    ap.add_argument("--lake", type=Path, default=ROOT / "data" / "lake",
+                    help="NSE only: the platform's data repository (option and futures 1-minute candles)")
     args = ap.parse_args(argv)
     if args.market == "nse":
         db = args.db or ROOT / "data" / "market_nse.db"
         hh, mm = (int(x) for x in args.at.split(":"))
         bars, chains, earn, splits, notes = load_nse(db, args.assume_spread, args.risk_free, at=hh * 60 + mm,
-                                                     window=args.window)
+                                                     window=args.window, lake=args.lake)
         title = "Option-selling study on Indian data (NSE, recorded by this system)"
     else:
         db = args.db or DB

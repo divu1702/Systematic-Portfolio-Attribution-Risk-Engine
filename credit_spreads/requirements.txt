@@ -19,3 +19,4 @@ uvicorn>=0.27             # serves the control centre on the laptop
 python-multipart>=0.0.9   # form posts and the events-file upload
 pyarrow>=15               # option chain snapshots as Parquet
 httpx>=0.27               # FastAPI test client
+duckdb>=1.1               # the data repository's queries and compaction (datalake/)

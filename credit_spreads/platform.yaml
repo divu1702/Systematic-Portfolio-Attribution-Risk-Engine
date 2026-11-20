@@ -72,6 +72,33 @@ data:                       # +
 oi_system:                  # + the earlier system's two books, traded as the oi_tight and oi_loose accounts
   config: config.yaml
   books: {oi_tight: main, oi_loose: v2}
+lake:                       # + the market-data repository (owner: "go with defaults", 20 Nov 2026)
+  enabled: true
+  root: data/lake           # any folder, e.g. on an external drive or a cloud server's disk
+  expiries: 3               # listed monthly series archived
+  strikes: all              # all | band (within band_pct of the price)
+  band_pct: 0.25
+  first_pass_dte: 45        # 1-minute candles of each contract: everything since listing at 45 days to expiry,
+  mid_pass_dte: 20          #   again at 20 days,
+  final_pass_days: 3        #   and in the series' last 3 sessions (Kite deletes expired contracts)
+  max_requests_per_run: 12000      # Kite history requests a night (3 a second: about 67 minutes at most)
+  backfill_requests_per_run: 2000  # stock and index 1-minute history, going back
+  equity_minute_since: '2015-01-01'
+  indices: [NIFTY 50, NIFTY BANK, INDIA VIX]
+  quotes:                   # live minute quotes over Kite's WebSocket (3 connections x 3,000 instruments)
+    enabled: true
+    max_instruments: 9000
+    per_connection: 3000
+    depth: false            # top of book; true adds all 5 depth levels (about 3x the space)
+    start: '09:14'
+    end: '15:31'
+    flush_min: 15
+    roll_days: 4
+  nse:                      # NSE's daily files (bhavcopies, delivery, ban list, volatility, participant OI, lots)
+    daily: true
+    backfill_years: 5
+    backfill_files_per_run: 300
+    pause_s: 2.0
 paths:                      # +
   db: data/platform.db
   chain_snap: data/chain_snap

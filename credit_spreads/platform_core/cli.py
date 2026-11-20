@@ -9,6 +9,8 @@
   job NAME         run one scheduled job now (close, gap, exits, margins, official, monthly, login-link,
                    events-reminder)
   status           the five accounts' headline numbers
+  lake ACTION      the market-data repository: status | candles | backfill | nse | nse-backfill | migrate |
+                   compact | quotes | sql "SELECT ..." 
 Add --mock to run on the synthetic market (separate databases).
 """
 
@@ -192,6 +194,57 @@ def cmd_status(args) -> int:
     return 0
 
 
+def cmd_lake(args) -> int:
+    """The market-data repository: status, one job now, migration, compaction, or a SQL query."""
+    cfg = load_platform_config(args.config)
+    root = cfg.resolve(cfg.lake.root)
+    if args.action == "status":
+        from datetime import date as _date
+
+        from datalake.status import report
+
+        print(report(root, _date.today()))
+        return 0
+    if args.action == "sql":
+        from datalake.api import Lake
+
+        if not args.query:
+            print("usage: python -m platform_core lake sql \"SELECT ... FROM options_1m ...\"")
+            return 2
+        import pandas as pd
+
+        with pd.option_context("display.max_rows", 200, "display.width", 200):
+            print(Lake(root).sql(args.query))
+        return 0
+    p = _platform(args)
+    from datalake import candles, migrate, nse
+
+    if args.action == "candles":
+        print(candles.run(p, budget=args.budget).text())
+    elif args.action == "backfill":
+        print(candles.run_backfill(p, budget=args.budget).text())
+    elif args.action == "nse":
+        print(nse.run_daily(p).text())
+    elif args.action == "nse-backfill":
+        print(nse.backfill(p, files=args.budget).text())
+    elif args.action == "migrate":
+        print(migrate.migrate(p))
+    elif args.action == "compact":
+        print(f"{candles.compact_finished(p)} partitions compacted")
+    elif args.action == "quotes":
+        from datalake.quotes import Recorder
+
+        rec = Recorder(p)
+        print(rec.start())
+        try:
+            for proc in list(rec.procs.values()):
+                proc.join()
+        except KeyboardInterrupt:
+            pass
+        print(rec.stop())
+    return 0
+
+
 def cmd_doctor(args) -> int:
     from .doctor import run
 
@@ -228,6 +281,14 @@ def build_parser() -> argparse.ArgumentParser:
                                      "events-reminder"])
     sp.add_argument("--mock", action="store_true")
     sp.set_defaults(func=cmd_job)
+    sp = sub.add_parser("lake", help="the market-data repository")
+    sp.add_argument("action", choices=["status", "candles", "backfill", "nse", "nse-backfill", "migrate", "compact",
+                                       "quotes", "sql"])
+    sp.add_argument("query", nargs="?", help="SQL for `lake sql` (views: options_1m, futures_1m, equity_1m, "
+                                             "quotes_1m, instruments, bhav_fo, bhav_cm)")
+    sp.add_argument("--budget", type=int, default=None, help="Kite requests (or NSE files) for this run")
+    sp.add_argument("--mock", action="store_true")
+    sp.set_defaults(func=cmd_lake)
     sp = sub.add_parser("status", help="the five accounts")
     sp.add_argument("--mock", action="store_true")
     sp.set_defaults(func=cmd_status)
