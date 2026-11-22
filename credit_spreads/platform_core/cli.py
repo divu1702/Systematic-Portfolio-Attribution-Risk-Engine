@@ -1,6 +1,8 @@
 """`python -m platform_core <command>`: the platform's command line. Paper trading only.
 
   run              scheduler + control centre (+ Telegram commands such as /token when configured)
+  service ACTION   start with the laptop and keep running: install | status | logs | restart | stop | start |
+                   uninstall
   serve            the control centre alone
   doctor           checks the laptop setup without printing any secret
   set-pin          set the control-centre PIN (stored hashed in .env)
@@ -54,13 +56,29 @@ def _serve_thread(p, env=None) -> threading.Thread:
     return t
 
 
+def _streams(log_dir: Path) -> None:
+    """Without a console (pythonw on Windows, a background service) print() and tracebacks go to a file."""
+    log_dir.mkdir(parents=True, exist_ok=True)
+    if sys.stdout is None:
+        sys.stdout = open(log_dir / "service.out.log", "a", buffering=1, encoding="utf-8")
+    if sys.stderr is None:
+        sys.stderr = open(log_dir / "service.err.log", "a", buffering=1, encoding="utf-8")
+
+
 def cmd_run(args) -> int:
     from app.logging_setup import setup_logging
 
+    from .instance import SingleInstance
     from .scheduler import build_scheduler
 
     p = _platform(args)
+    _streams(p.ctx.cfg.log_dir)
     setup_logging(p.ctx.cfg.log_dir, level="INFO")
+    db = p.pengine.url.database
+    lock = SingleInstance(Path(db).with_suffix(".lock"))
+    if not lock.acquire():
+        print(f"The platform is already running (process {lock.holder()}); not starting a second copy.")
+        return 0
     sched = build_scheduler(p, blocking=False)
     sched.start()
     if not args.no_web:
@@ -72,6 +90,11 @@ def cmd_run(args) -> int:
           + ("" if args.no_web else f"Control centre on http://{cc.host}:{cc.port} (reach it through Tailscale). ")
           + ("Telegram bot on. " if use_bot else "Telegram not configured: alerts go to the log. ") + "Ctrl+C to stop.")
     try:
+        p.notifier.send(f"Platform started at {p.now():%a %d %b %H:%M}: {p.daily.summary()}.", "info")
+    except Exception:
+        pass
+    threading.Thread(target=p.daily.tick, name="first-tick", daemon=True).start()    # catch up at once
+    try:
         if use_bot:
             from app.reporting.telegram_bot import run_bot
 
@@ -82,7 +105,53 @@ def cmd_run(args) -> int:
         print("stopped")
     finally:
         sched.shutdown(wait=False)
+        if getattr(p, "recorder", None) is not None:
+            try:
+                p.recorder.stop(timeout=20)
+            except Exception:
+                pass
+        lock.release()
     return 0
+
+
+def cmd_service(args) -> int:
+    from .service import Service, tail
+
+    svc = Service(Path(args.config))
+    if args.action == "install":
+        if not args.force:
+            from io import StringIO
+
+            from .doctor import run as doctor
+
+            buf = StringIO()
+            if doctor(args.config, buf, env_path=ENV_PATH) != 0:
+                print(buf.getvalue())
+                print("Fix the errors above first (or install anyway with --force): a service that cannot start "
+                      "would only restart again and again.")
+                return 1
+        lines = svc.install()
+    elif args.action == "uninstall":
+        lines = svc.uninstall()
+    elif args.action == "start":
+        lines = svc.start()
+    elif args.action == "stop":
+        lines = svc.stop()
+    elif args.action == "restart":
+        lines = svc.restart()
+    elif args.action == "status":
+        lines = [svc.status()]
+    else:
+        cfg = load_platform_config(args.config)
+        from app.config import load_config
+
+        logs = load_config(cfg.resolve(cfg.oi_system.config)).log_dir
+        lines = [tail(logs / "app.log", args.lines)]
+        err = logs / "service.err.log"
+        if err.exists() and err.stat().st_size:
+            lines.append("\n--- service.err.log ---\n" + tail(err, 30))
+    print("\n".join(lines))
+    return 0 if all(not str(x).startswith("failed") for x in lines) else 1
 
 
 def cmd_serve(args) -> int:
@@ -281,6 +350,11 @@ def build_parser() -> argparse.ArgumentParser:
                                      "events-reminder"])
     sp.add_argument("--mock", action="store_true")
     sp.set_defaults(func=cmd_job)
+    sp = sub.add_parser("service", help="start with the laptop and keep running (Windows, macOS, Linux)")
+    sp.add_argument("action", choices=["install", "uninstall", "start", "stop", "restart", "status", "logs"])
+    sp.add_argument("--force", action="store_true", help="install even if the doctor reports errors")
+    sp.add_argument("--lines", type=int, default=60, help="lines of log to show")
+    sp.set_defaults(func=cmd_service)
     sp = sub.add_parser("lake", help="the market-data repository")
     sp.add_argument("action", choices=["status", "candles", "backfill", "nse", "nse-backfill", "migrate", "compact",
                                        "quotes", "sql"])

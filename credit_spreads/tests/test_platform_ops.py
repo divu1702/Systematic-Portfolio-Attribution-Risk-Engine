@@ -56,8 +56,12 @@ def test_job_specs_cover_both_systems(plat):
     assert specs["exit_checks"][0] == {"hour": "10-15", "minute": "0,30"}
     assert specs["level_close_run"][0] == {"hour": 15, "minute": 20}
     assert specs["official_recheck"][0] == {"hour": 18, "minute": 30}
-    sched = S.build_scheduler(plat)
-    assert {j.id for j in sched.get_jobs()} == set(specs)
+    from platform_core.daily import build_jobs
+
+    sched = S.build_scheduler(plat, keep_awake=False)               # once-a-day jobs go through the daily runner
+    daily = {j.name for j in build_jobs(S.job_specs(plat))}
+    ids = {j.id for j in sched.get_jobs()}
+    assert ids | daily | {"lake_quotes_start"} == set(specs) | {"daily_runner"} and not ids & daily
 
 
 def test_the_earlier_systems_entries_wait_for_go_live(plat, platform_cfg, monkeypatch):

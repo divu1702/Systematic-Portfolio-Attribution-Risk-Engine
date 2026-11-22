@@ -221,6 +221,19 @@ class OISystemCfg(_S):
         return v
 
 
+class ServiceCfg(_S):
+    """Running unattended on the laptop (python -m platform_core service install)."""
+    awake_from: str = "08:35"               # trading days: the laptop is kept from sleeping between these times
+    awake_until: str = "18:55"
+    catch_up: bool = True                   # once-a-day jobs missed while off, asleep or logged out run late,
+                                            # before their deadlines
+
+    @field_validator("awake_from", "awake_until")
+    @classmethod
+    def _times(cls, v: str) -> str:
+        return _hhmm(v)
+
+
 class LakeQuotesCfg(_S):
     enabled: bool = True
     max_instruments: PosInt = 9000          # Kite: 3 WebSocket connections per API key
@@ -299,6 +312,7 @@ class PlatformConfig(_S):
     data: DataCfg = DataCfg()
     oi_system: OISystemCfg = OISystemCfg()
     lake: LakeCfg = LakeCfg()
+    service: ServiceCfg = ServiceCfg()
     paths: PathsCfg = PathsCfg()
     base_dir: Path = Field(default=PROJECT_ROOT, exclude=True)
 

@@ -97,6 +97,15 @@ def run(config_path, out: TextIO, env_path: Path) -> int:
     except Exception:
         pass
 
+    out.write("\nRunning on its own\n------------------\n")
+    try:
+        from .service import Service
+
+        svc = Service(Path(config_path))
+        row("service", "installed (starts with the laptop)" if svc.installed() else
+            "not installed: python -m platform_core service install")
+    except Exception as exc:
+        row("service", f"could not check ({exc})")
     out.write("\nPhone access\n------------\n")
     row("Tailscale", "on the laptop: tailscale serve --bg --https=443 "
                      f"http://{cfg.control_centre.host}:{cfg.control_centre.port} (see README)")

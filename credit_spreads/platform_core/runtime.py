@@ -27,6 +27,7 @@ class Platform:
     broker: PaperBroker
     engine: object                  # level_system.engine.LevelEngine
     recorder: object = None         # datalake.quotes.Recorder while live quotes are being recorded
+    daily: object = None            # platform_core.daily.DailyRunner once the scheduler is built
 
     @property
     def notifier(self):

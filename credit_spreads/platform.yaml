@@ -99,6 +99,11 @@ lake:                       # + the market-data repository (owner: "go with defa
     backfill_years: 5
     backfill_files_per_run: 300
     pause_s: 2.0
+service:                    # + running unattended on the laptop: python -m platform_core service install
+  awake_from: '08:35'       # trading days: the laptop is kept from sleeping between these times
+  awake_until: '18:55'
+  catch_up: true            # daily jobs missed while the laptop was off or asleep run when it is back,
+                            #   each before its deadline (platform_core/daily.py)
 paths:                      # +
   db: data/platform.db
   chain_snap: data/chain_snap

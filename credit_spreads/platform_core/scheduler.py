@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import logging
 from datetime import date, datetime, time, timedelta
-from typing import Callable, Dict, List, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 
 from app.clock import IST, parse_hhmm
 
@@ -89,26 +89,58 @@ def close_run(p):
     return rep
 
 
-def official(p):
+def _official_day(p, d, record: bool):
     from level_system import comparison, report
 
     from . import oi_bridge
+    from .db import get_state, put_state
 
-    d = p.today()
     rep = p.engine.official_recheck(d)
     rep.warnings += oi_bridge.sync_closed(p.ctx, p.broker)
-    try:
-        p.broker.record_day(d)                       # values after settlement (saved marks if Kite is closed)
-    except Exception as exc:
-        rep.warnings.append(f"account values not recorded: {exc}")
+    if record:
+        try:
+            p.broker.record_day(d)                   # values after settlement (saved marks if Kite is closed)
+        except Exception as exc:
+            rep.warnings.append(f"account values not recorded: {exc}")
     report.save_run(p.cfg.resolve(p.cfg.paths.reports), rep)
     for w in rep.warnings:
-        p.notifier.send(f"18:30: {w}", "warning")
+        p.notifier.send(f"{'18:30' if record else f'Catch-up for {d}'}: {w}", "warning")
     cal = p.ds.calendar()
     if cal.next_trading_day(d).month != d.month:
         path = comparison.write(p, d)
         p.notifier.send(f"Monthly comparison for {d:%B %Y} ready: {path.name}", "info")
+    last = get_state(p.pengine, "official_last")
+    if not last or last < d.isoformat():
+        put_state(p.pengine, "official_last", d.isoformat(), p.now())
     return rep
+
+
+def official(p):
+    return _official_day(p, p.today(), record=True)
+
+
+def official_catchup(p) -> str:
+    """08:50: the official re-check and expiry settlement for trading days the laptop missed at 18:30
+    (up to 7). Settlement then uses NSE's official closes of those days."""
+    from datetime import date as _date
+
+    from .db import get_state, put_state
+
+    cal, today = p.ds.calendar(), p.today()
+    last = get_state(p.pengine, "official_last")
+    if not last:
+        put_state(p.pengine, "official_last", cal.prev_trading_day(today).isoformat(), p.now())
+        return "nothing to catch up"
+    days, d = [], cal.next_trading_day(_date.fromisoformat(last))
+    while d < today and len(days) < 7:
+        days.append(d)
+        d = cal.next_trading_day(d)
+    for d in days:
+        _official_day(p, d, record=False)
+    if days:
+        p.notifier.send(f"Caught up the official re-check for {', '.join(str(x) for x in days)} "
+                        "(the laptop was off at 18:30).", "info")
+    return f"caught up {len(days)} day(s)"
 
 
 # ---------------------------------------------------------------------- the data repository (datalake/)
@@ -126,12 +158,21 @@ def lake_quotes_start(p) -> str:
 
 
 def lake_quotes_stop(p) -> str:
+    from datalake.quotes import Recorder
+
     rec = getattr(p, "recorder", None)
     if rec is None:
-        return "quote recording was not running"
+        if getattr(p.ctx, "is_mock", False):
+            return "quote recording was not running"
+        return Recorder(p).finish(p.today())          # a restart during the day: still compact the day's files
     msg = rec.stop()
     p.recorder = None
     return msg
+
+
+def quotes_running(p) -> bool:
+    rec = getattr(p, "recorder", None)
+    return bool(rec and any(proc.is_alive() for proc in rec.procs.values()))
 
 
 def lake_candles(p):
@@ -190,6 +231,7 @@ def job_specs(p) -> List[Tuple[str, Dict, Callable, bool]]:
         ("exit_checks", {"hour": hours, "minute": minutes}, lambda: exit_check(p), True),
         ("level_close_run", _hm(cfg.screener.run_at), lambda: close_run(p), True),
         ("official_recheck", _hm(s.official_recheck), lambda: official(p), False),
+        ("official_catchup", {"hour": 8, "minute": 50}, lambda: official_catchup(p), False),
     ]
     lk = cfg.lake
     if lk.enabled:
@@ -205,17 +247,52 @@ def job_specs(p) -> List[Tuple[str, Dict, Callable, bool]]:
     return out
 
 
-def build_scheduler(p, blocking: bool = False):
+class RepeatingGuard:
+    """The earlier system's guard for jobs that repeat through the day; without a Kite session they are
+    skipped quietly (the daily runner sends one login reminder)."""
+
+    def __init__(self, ctx, name, fn, needs_session, trading_day_only=True):
+        from app.scheduler import Guard
+
+        self.ctx, self.needs_session = ctx, needs_session
+        self.guard = Guard(ctx, name, fn, False, trading_day_only)
+
+    def __call__(self):
+        if self.needs_session and not self.ctx.broker.session_valid():
+            return None
+        return self.guard()
+
+
+def build_scheduler(p, blocking: bool = False, keep_awake: Optional[bool] = None):
+    """Repeating jobs on cron; once-a-day jobs through the daily runner (due time, catch-up, deadline),
+    ticking every minute at hh:mm:05."""
     from apscheduler.schedulers.background import BackgroundScheduler
     from apscheduler.schedulers.blocking import BlockingScheduler
     from apscheduler.triggers.cron import CronTrigger
 
-    from app.scheduler import Guard
+    from app.scheduler import _LOCK
+
+    from .daily import DailyRunner, build_jobs
+    from .keepawake import KeepAwake
 
     sched = (BlockingScheduler if blocking else BackgroundScheduler)(timezone=IST)
-    for name, fields, fn, needs_session in job_specs(p):
+    specs = job_specs(p)
+    daily = build_jobs(specs)
+    names = {j.name for j in daily} | {"lake_quotes_start"}
+    for name, fields, fn, needs_session in specs:
+        if name in names:
+            continue
         fields = {"day_of_week": "mon-fri", **fields}
-        sched.add_job(Guard(p.ctx, name, fn, needs_session, trading_day_only=name != "oi_weekly_report"),
+        sched.add_job(RepeatingGuard(p.ctx, name, fn, needs_session, trading_day_only=name != "oi_weekly_report"),
                       CronTrigger(timezone=IST, **fields), id=name, name=name, max_instances=1, coalesce=True,
                       misfire_grace_time=300)
+    q = p.cfg.lake.quotes
+    window = (parse_hhmm(q.start), parse_hhmm(q.end)) if p.cfg.lake.enabled and q.enabled else None
+    if keep_awake is None:
+        keep_awake = not getattr(p.ctx, "is_mock", False)
+    runner = DailyRunner(p, daily, _LOCK, awake=KeepAwake() if keep_awake else None, quotes_window=window,
+                         start_quotes=lambda: lake_quotes_start(p), quotes_running=lambda: quotes_running(p))
+    p.daily = runner
+    sched.add_job(runner.tick, CronTrigger(timezone=IST, second=5), id="daily_runner", name="daily_runner",
+                  max_instances=1, coalesce=True, misfire_grace_time=55)
     return sched

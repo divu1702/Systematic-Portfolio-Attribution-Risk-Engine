@@ -5,6 +5,16 @@ Each entry names the keys changed, old and new values, and the evidence.
 
 ## Unreleased
 
+### Running unattended (20 Nov 2026)
+- `python -m platform_core service install|status|logs|restart|stop|start|uninstall`: starts the platform with
+  the laptop (Windows Task Scheduler at log-on, macOS launchd agent, Linux systemd user service) and restarts it
+  if it stops. Only one platform process can run at a time.
+- Once-a-day jobs now run through a daily runner (platform_core/daily.py): at their due time, or as soon as
+  possible after a late start, a sleep or a late Kite login, before each job's deadline; missed jobs are
+  reported, failed ones retried every 5 minutes, progress kept across restarts. The quote recorder is kept
+  running in its window. Missed official re-checks and expiry settlements run the next morning (08:50).
+- The laptop is kept awake on trading days from 08:35 to 18:55 (`service` in platform.yaml).
+
 ### Market-data repository (owner: "go with defaults", 20 Nov 2026)
 - New `datalake/`: Parquet repository with a SQLite catalog under `lake.root` (`data/lake`). Nightly 1-minute
   candles with OI for every listed strike of the next 3 series and every stock future (passes at 45 and 20

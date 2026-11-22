@@ -55,9 +55,42 @@ python -m pytest tests/test_level_realdays.py            # the spec's two real-d
 git add tests/fixtures/realdays && git commit -m "Real-day fixtures"   # keep them with the code
 ```
 
-Then leave `python -m platform_core run` running from 08:40 to 18:45 on trading days, with the laptop plugged
-in, sleep off and on wifi. That one process runs the scheduler for both systems, the control centre on
-`127.0.0.1:8765`, and the Telegram bot (`/token`, `/status`, `/kill` …).
+Then let it run on its own: `python -m platform_core service install` (see "Running on its own").
+
+### Running on its own
+
+After `python -m platform_core service install` (run it from the project's virtual environment), both the
+paper trading and the data repository run without you or Claude; come back to Claude only to change code.
+
+- **Starts with the laptop.** Windows: a Task Scheduler task at log-on; macOS: a launchd agent at log-in;
+  Linux: a systemd user service at boot. If the process ever stops, the system restarts it within a minute.
+  Only one copy can run, so starting it by hand as well does no harm.
+- **Jobs at their due times, or as soon as possible after.** Every once-a-day job has a deadline. If the
+  laptop was off or asleep at a job's time, or Kite was not logged in yet, the job runs as soon as it can,
+  before its deadline: the morning jobs until 15:00-15:30, the 15:20 run until 15:28, the evening jobs until
+  midnight. A job past its deadline is reported on Telegram as missed. A failed job is retried every five
+  minutes. The official re-check and expiry settlement of days the laptop missed at 18:30 run the next
+  morning at 08:50. The live-quote recorder is started whenever it should be running and is not.
+- **Awake on trading days.** The platform keeps the laptop from sleeping from 08:35 to 18:55
+  (`service` in platform.yaml), and lets it sleep otherwise.
+- **The one daily step that stays manual: the Kite login** (SEBI's daily two-factor rule). At 08:45 Telegram
+  sends the link; log in on the phone and send `/token <request_token>` to the bot. Jobs that need Kite
+  wait for it and run as soon as you log in.
+
+Laptop settings to make it reliable: keep it plugged in; keep the lid open (or set Windows' "When I close
+the lid" to "Do nothing" when plugged in; a Mac sleeps with the lid closed unless it has an external
+display; on Linux set `HandleLidSwitch=ignore` in logind.conf); set Windows Update's active hours to
+08:00-19:00 so it never restarts during the session. Optional: sign in automatically at boot (Windows:
+`netplwiz`; macOS: Users & Groups) so nothing waits for your password. On Windows the task also wakes
+the laptop at 08:30 on weekdays when "Allow wake timers" is on in the power plan.
+
+| Command | |
+|---|---|
+| `python -m platform_core service status` | is it installed and running |
+| `python -m platform_core service logs` | the last lines of `logs/app.log` (and any crash output) |
+| `python -m platform_core service restart` | after pulling a code change (`git pull`) |
+| `python -m platform_core service stop` / `start` | pause it (until `start`, or on Windows and macOS the next log-in) |
+| `python -m platform_core service uninstall` | remove it |
 
 ### Tailscale: the phone reaches the laptop privately
 
