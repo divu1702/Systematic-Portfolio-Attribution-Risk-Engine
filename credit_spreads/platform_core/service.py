@@ -3,9 +3,10 @@
 `python -m platform_core service install` registers `python -m platform_core run` with the operating
 system, using the Python it is run with (run it from the project's virtual environment):
 
-- Windows: a Task Scheduler task that starts at log-on, restarts within a minute if the process
-  stops, re-checks every 15 minutes, runs on battery, has no time limit, and wakes the laptop at 08:30
-  on weekdays when wake timers are allowed.
+- Windows: a Task Scheduler task for the signed-in user that checks every 5 minutes (so the platform
+  starts within 5 minutes of signing in and is restarted within 5 minutes if it stops), restarts on
+  failure, runs on battery, has no time limit, and wakes the laptop at 08:30 on weekdays when wake timers
+  are allowed. It uses only time triggers, so installing it needs no administrator rights.
 - macOS: a launchd agent (RunAtLoad, KeepAlive) in ~/Library/LaunchAgents.
 - Linux: a systemd user service (Restart=always), with lingering so it starts at boot.
 
@@ -73,15 +74,17 @@ def launchd_plist(python: str, project: Path, config: Path, logs: Path) -> bytes
 
 def windows_task_xml(python: str, project: Path, config: Path, user: str) -> str:
     args = " ".join(f'"{a}"' if " " in a else a for a in args_for(config))
+    command = f'"{python}"' if " " in python else python
     return f"""<?xml version="1.0" encoding="UTF-16"?>
 <Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
   <RegistrationInfo><Description>{escape(DESCRIPTION)}</Description></RegistrationInfo>
   <Triggers>
-    <LogonTrigger>
+    <CalendarTrigger>
+      <StartBoundary>2026-01-01T00:00:00</StartBoundary>
       <Enabled>true</Enabled>
-      <UserId>{escape(user)}</UserId>
-      <Repetition><Interval>PT15M</Interval><StopAtDurationEnd>false</StopAtDurationEnd></Repetition>
-    </LogonTrigger>
+      <Repetition><Interval>PT5M</Interval><Duration>P1D</Duration><StopAtDurationEnd>false</StopAtDurationEnd></Repetition>
+      <ScheduleByDay><DaysInterval>1</DaysInterval></ScheduleByDay>
+    </CalendarTrigger>
     <CalendarTrigger>
       <StartBoundary>2026-01-01T08:30:00</StartBoundary>
       <Enabled>true</Enabled>
@@ -113,7 +116,7 @@ def windows_task_xml(python: str, project: Path, config: Path, user: str) -> str
   </Settings>
   <Actions Context="Author">
     <Exec>
-      <Command>{escape(python)}</Command>
+      <Command>{escape(command)}</Command>
       <Arguments>{escape(args)}</Arguments>
       <WorkingDirectory>{escape(str(project))}</WorkingDirectory>
     </Exec>
@@ -216,7 +219,7 @@ class Service:
         return out
 
     def stop(self) -> List[str]:
-        """Stops it until the next `service start` (or, on Windows and macOS, the next log-in)."""
+        """Stops it until the next `service start` (on macOS, also until the next log-in)."""
         out: List[str] = []
         if self.kind == "linux":
             self._do(["systemctl", "--user", "stop", UNIT], out)

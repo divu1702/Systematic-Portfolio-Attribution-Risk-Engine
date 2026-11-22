@@ -241,13 +241,17 @@ def test_windows_service(tmp_path, monkeypatch):
     calls, run = recorder()
     monkeypatch.setenv("USERDOMAIN", "LAPTOP")
     monkeypatch.setenv("USERNAME", "owner")
-    svc = service.Service(tmp_path / "platform.yaml", project=tmp_path, python=r"C:\venv\Scripts\python.exe",
+    svc = service.Service(tmp_path / "platform.yaml", project=tmp_path, python=r"D:\option selling\.venv\Scripts\python.exe",
                           platform="win32", run=run)
     svc.install()
     xml = svc.xml_path.read_text(encoding="utf-16")
     ns = {"t": "http://schemas.microsoft.com/windows/2004/02/mit/task"}
     root = ET.fromstring(xml.split("?>", 1)[1])
-    assert root.find("t:Triggers/t:LogonTrigger/t:UserId", ns).text == "LAPTOP\\owner"
+    assert root.find("t:Principals/t:Principal/t:UserId", ns).text == "LAPTOP\\owner"
+    assert root.find("t:Triggers/t:LogonTrigger", ns) is None                 # time triggers only: no admin rights
+    rep = root.find("t:Triggers/t:CalendarTrigger/t:Repetition", ns)
+    assert rep.find("t:Interval", ns).text == "PT5M" and rep.find("t:Duration", ns).text == "P1D"
+    assert root.find("t:Actions/t:Exec/t:Command", ns).text == '"D:\\option selling\\.venv\\Scripts\\python.exe"'
     st = root.find("t:Settings", ns)
     assert st.find("t:ExecutionTimeLimit", ns).text == "PT0S" and st.find("t:DisallowStartIfOnBatteries", ns).text == "false"
     assert st.find("t:RestartOnFailure/t:Count", ns).text == "999" and st.find("t:MultipleInstancesPolicy", ns).text == "IgnoreNew"

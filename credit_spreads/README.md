@@ -62,8 +62,9 @@ Then let it run on its own: `python -m platform_core service install` (see "Runn
 After `python -m platform_core service install` (run it from the project's virtual environment), both the
 paper trading and the data repository run without you or Claude; come back to Claude only to change code.
 
-- **Starts with the laptop.** Windows: a Task Scheduler task at log-on; macOS: a launchd agent at log-in;
-  Linux: a systemd user service at boot. If the process ever stops, the system restarts it within a minute.
+- **Starts with the laptop.** Windows: a Task Scheduler task that checks every 5 minutes while you are signed
+  in (it needs no administrator rights); macOS: a launchd agent at log-in; Linux: a systemd user service at
+  boot. If the process ever stops, it is started again within a few minutes.
   Only one copy can run, so starting it by hand as well does no harm.
 - **Jobs at their due times, or as soon as possible after.** Every once-a-day job has a deadline. If the
   laptop was off or asleep at a job's time, or Kite was not logged in yet, the job runs as soon as it can,
@@ -89,7 +90,7 @@ the laptop at 08:30 on weekdays when "Allow wake timers" is on in the power plan
 | `python -m platform_core service status` | is it installed and running |
 | `python -m platform_core service logs` | the last lines of `logs/app.log` (and any crash output) |
 | `python -m platform_core service restart` | after pulling a code change (`git pull`) |
-| `python -m platform_core service stop` / `start` | pause it (until `start`, or on Windows and macOS the next log-in) |
+| `python -m platform_core service stop` / `start` | pause it until `start` (on macOS, also until the next log-in) |
 | `python -m platform_core service uninstall` | remove it |
 
 ### Tailscale: the phone reaches the laptop privately

@@ -7,8 +7,9 @@ Each entry names the keys changed, old and new values, and the evidence.
 
 ### Running unattended (20 Nov 2026)
 - `python -m platform_core service install|status|logs|restart|stop|start|uninstall`: starts the platform with
-  the laptop (Windows Task Scheduler at log-on, macOS launchd agent, Linux systemd user service) and restarts it
-  if it stops. Only one platform process can run at a time.
+  the laptop (a Windows Task Scheduler task that checks every 5 minutes while the user is signed in, needing no
+  administrator rights; a macOS launchd agent; a Linux systemd user service) and restarts it if it stops. Only one
+  platform process can run at a time.
 - Once-a-day jobs now run through a daily runner (platform_core/daily.py): at their due time, or as soon as
   possible after a late start, a sleep or a late Kite login, before each job's deadline; missed jobs are
   reported, failed ones retried every 5 minutes, progress kept across restarts. The quote recorder is kept
